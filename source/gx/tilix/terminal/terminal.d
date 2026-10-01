@@ -1890,12 +1890,16 @@ private:
 
             mmContext.appendItem(clipItem);
         }
+        // Maximize is always offered, it's quicker than the small title bar button
+        // in a busy layout. The other title bar items are only added when it's hidden.
+        GMenu windowSection = new GMenu();
+        windowSection.append(terminalWindowState == TerminalWindowState.MAXIMIZED ? _("Restore") : _("Maximize"), getActionDetailedName(ACTION_PREFIX, ACTION_MAXIMIZE));
+        if (!bTitle.isVisible()) {
+            windowSection.append(_("Close"), getActionDetailedName(ACTION_PREFIX, ACTION_CLOSE));
+        }
+        mmContext.appendSection(null, windowSection);
         //Check if titlebar is hidden and add extra items
         if (!bTitle.isVisible()) {
-            GMenu windowSection = new GMenu();
-            windowSection.append(terminalWindowState == TerminalWindowState.MAXIMIZED ? _("Restore") : _("Maximize"), getActionDetailedName(ACTION_PREFIX, ACTION_MAXIMIZE));
-            windowSection.append(_("Close"), getActionDetailedName(ACTION_PREFIX, ACTION_CLOSE));
-            mmContext.appendSection(null, windowSection);
             if (_synchronizeInput) {
                 GMenu syncInputSection = new GMenu();
                 syncInputSection.append(_("Synchronize input"), getActionDetailedName(ACTION_PREFIX, ACTION_SYNC_INPUT_OVERRIDE));
