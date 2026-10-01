@@ -218,8 +218,7 @@ private:
             case GdkKeysyms.GDK_0:
             ..
             case GdkKeysyms.GDK_9:
-                int num = keyval - GdkKeysyms.GDK_0 - 1;
-                if (num == -1) num = 10;
+                int num = sessionRowForKey(keyval);
                 ListBoxRow row = lbSessions.getRowAtIndex(num);
                 if (row !is null) {
                     lbSessions.selectRow(row);
@@ -712,3 +711,13 @@ public:
         lblIndex.setText(to!string(value));
     }
 }
+/**
+ * Returns the row selected by a number key, 1 to 9 select the first nine
+ * sessions and 0 the tenth, or -1 if the key isn't a number key.
+ */
+int sessionRowForKey(uint keyval) {
+    if (keyval < GdkKeysyms.GDK_0 || keyval > GdkKeysyms.GDK_9) return -1;
+    int num = keyval - GdkKeysyms.GDK_0 - 1;
+    return (num == -1) ? 9 : num;
+}
+

@@ -4,7 +4,6 @@
  */
 module gx.tilix.session;
 
-import core.stdc.locale;
 
 import std.algorithm;
 import std.conv;
@@ -57,6 +56,7 @@ import gx.gtk.threads;
 import gx.gtk.util;
 import gx.i18n.l10n;
 import gx.util.array;
+import gx.util.locale;
 
 import gx.tilix.application;
 import gx.tilix.appwindow;
@@ -1069,8 +1069,9 @@ public:
             // Never use experimental logging in destructors, causes
             // memory exceptions on GC for some reason
 
-            //Clean up terminal references
-            foreach(terminal; terminals) {
+            //Clean up terminal references, iterate over a copy since
+            //removeTerminalReferences removes each terminal from the array
+            foreach(terminal; terminals.dup) {
                 //trace("Removing terminal reference");
                 removeTerminalReferences(terminal);
             }
@@ -1170,8 +1171,6 @@ public:
             paned.updateRatio();
         }
 
-        // Make sure that generated JSON won't be locale-specific
-        setlocale(LC_ALL, "C");
         JSONValue root = ["version" : "1.0"];
         root.object[NODE_NAME] = _name;
         root.object[NODE_SYNCHRONIZED_INPUT] = _synchronizeInput;
@@ -1181,8 +1180,17 @@ public:
         root.object[NODE_CHILD] = serializeWidget(gx.gtk.util.getChildren!(Widget)(groupChild, false)[0], sizeInfo);
         root.object[NODE_UUID] = _sessionUUID;
         root[NODE_TYPE] = WidgetType.SESSION;
-        setlocale(LC_ALL, null);
         return root;
+    }
+
+    /**
+     * Serializes the session to a JSON string suitable for saving to a file
+     */
+    string serializeToJSON() {
+        // Make sure that generated JSON won't be locale-specific, i.e. use a
+        // decimal point for ratios. Numbers are formatted when the string is
+        // generated, not in serialize(), so the locale must cover both.
+        return withCNumericLocale(() => serialize().toPrettyString());
     }
 
     /**

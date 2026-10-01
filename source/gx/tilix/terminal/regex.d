@@ -370,7 +370,7 @@ immutable VRegex[URL_REGEX_PATTERNS.length] compiledVRegex;
 
 GRegex compileGRegex(TerminalRegex regex) {
     if (regex.pattern.length == 0) return null;
-    GRegexCompileFlags flags = GRegexCompileFlags.OPTIMIZE | regex.caseless ? GRegexCompileFlags.CASELESS : cast(GRegexCompileFlags) 0;
+    GRegexCompileFlags flags = GRegexCompileFlags.OPTIMIZE | (regex.caseless ? GRegexCompileFlags.CASELESS : cast(GRegexCompileFlags) 0);
     flags = flags | GRegexCompileFlags.MULTILINE;
     return new GRegex(regex.pattern, flags, cast(GRegexMatchFlags) 0);
 }

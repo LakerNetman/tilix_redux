@@ -59,3 +59,12 @@ string getUserShell(string shell) {
 bool isFlatpak() {
     return "/.flatpak-info".exists;
 }
+/**
+ * Escape sequences can only move the cursor within the visible screen, so if the
+ * cursor is further back than one screen from the last row checked for triggers
+ * the scrollback must have been cleared, i.e. by the clear command.
+ */
+bool isScrollbackCleared(long cursorRow, long lastRowChecked, long rowCount) {
+    return cursorRow < lastRowChecked - rowCount;
+}
+

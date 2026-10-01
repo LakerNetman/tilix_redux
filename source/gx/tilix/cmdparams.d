@@ -1,6 +1,8 @@
 module gx.tilix.cmdparams;
 
 import std.algorithm;
+import std.array : join;
+import std.ascii : isAlphaNum;
 import std.conv;
 import std.experimental.logger;
 import std.file;
@@ -12,6 +14,7 @@ import std.string;
 
 import gio.ApplicationCommandLine;
 
+import glib.ShellUtils;
 import glib.VariantDict;
 import glib.Variant : GVariant = Variant;
 import glib.VariantType : GVariantType = VariantType;
@@ -92,6 +95,24 @@ Geometry parseGeometryString(string value) {
 }
 
 /**
+ * Joins the arguments following -e or -x into a single command. The command
+ * is split back into arguments with g_shell_parse_argv later so anything that
+ * isn't a plain word is quoted, keeping each argument, including empty ones and
+ * those with quotes or backslashes, intact.
+ */
+string joinCommandArgs(string[] args) {
+    string[] parts;
+    foreach (arg; args) {
+        if (arg.length > 0 && arg.all!(c => isAlphaNum(c) || "_@%+=:,./-".canFind(c))) {
+            parts ~= arg;
+        } else {
+            parts ~= ShellUtils.shellQuote(arg);
+        }
+    }
+    return parts.join(" ");
+}
+
+/**
  * Returns the group from -g NAME, --group NAME or --group=NAME in the
  * arguments, the last one wins, or null if there is none.
  */
@@ -159,9 +180,9 @@ private:
         }
     }
 
-    string validatePath(string path) {
+    string validatePath(string path, ApplicationCommandLine acl) {
         if (path.length > 0) {
-            path = resolvePath(path);
+            path = resolvePathForClient(path, acl);
             try {
                 if (!isDir(path)) {
                     writeln(format(_("Ignoring as '%s' is not a directory"), path));
@@ -173,6 +194,15 @@ private:
             }
         }
         return path;
+    }
+
+    /**
+     * Resolves a path passed on the command line using the environment and working
+     * directory of the process that invoked Tilix rather than those of the primary
+     * instance which may be a different process.
+     */
+    string resolvePathForClient(string path, ApplicationCommandLine acl) {
+        return resolvePath(path, (string name) => acl.getenv(name), acl.getCwd());
     }
 
     void parseGeometry(string value) {
@@ -189,16 +219,16 @@ public:
         GVariantType vts = new GVariantType("s");
         VariantDict vd = acl.getOptionsDict();
 
-        _workingDir = validatePath(getValue(vd, CMD_WORKING_DIRECTORY, vts));
+        _workingDir = validatePath(getValue(vd, CMD_WORKING_DIRECTORY, vts), acl);
         _pwd = acl.getenv("PWD");
         _cwd = acl.getCwd();
 
-        if (_cwd.length > 0) _cwd = validatePath(_cwd);
+        if (_cwd.length > 0) _cwd = validatePath(_cwd, acl);
 
         _session = getValues(vd, CMD_SESSION);
         if (_session.length > 0) {
             foreach(i, filename; _session) {
-                _session[i] = resolvePath(filename);
+                _session[i] = resolvePathForClient(filename, acl);
             }
         }
         _profileName = getValue(vd, CMD_PROFILE, vts);

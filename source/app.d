@@ -73,16 +73,7 @@ int main(string[] args) {
                 trace("Single command");
                 executeCommand = args[i + 1];
             } else {
-                for(size_t j=i+1; j<args.length; j++) {
-                    if (j > i + 1) {
-                        executeCommand ~= " ";
-                    }
-                    if (args[j].indexOf(" ") > 0) {
-                        executeCommand ~= "\"" ~ replace(args[j], "\"", "\\\"") ~ "\"";
-                    } else {
-                        executeCommand ~= args[j];
-                    }
-                }
+                executeCommand = joinCommandArgs(args[i + 1 .. $]);
             }
             trace("Execute Command: " ~ executeCommand);
             args = args[0..i];

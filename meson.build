@@ -76,6 +76,7 @@ tilix_sources = [
     'source/gx/tilix/shortcuts.d',
     'source/gx/tilix/sidebar.d',
     'source/gx/util/array.d',
+    'source/gx/util/locale.d',
     'source/gx/util/path.d',
     'source/gx/util/string.d',
     'source/secret/Collection.d',

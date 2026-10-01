@@ -675,6 +675,7 @@ private:
         });
         registerActionWithSettings(group, ACTION_PREFIX, ACTION_RESET_AND_CLEAR, gsShortcuts, delegate(GVariant, SimpleAction) {
             vte.reset(true, true);
+            resetTriggerPosition();
             // Clear history of prompts
             checkPromptBuffer();
             if (isSynchronizedInput()) {
@@ -1605,6 +1606,12 @@ private:
     glong triggerLastRowChecked = -1;
     glong triggerLastColChecked = -1;
 
+    // Called when the terminal contents are cleared so triggers are checked from the top
+    void resetTriggerPosition() {
+        triggerLastRowChecked = -1;
+        triggerLastColChecked = -1;
+    }
+
     TerminalScreen currentScreen = TerminalScreen.NORMAL;
 
     void onVTEScreenChanged(int screen, VTE) {
@@ -1629,6 +1636,14 @@ private:
         glong cursorRow, cursorCol;
         vte.getCursorPosition(cursorCol, cursorRow);
         //tracef("triggerLastRowChecked=%d, cursorRow=%d", triggerLastRowChecked, cursorRow);
+
+        // Escape sequences can only move the cursor within the visible screen, if it is
+        // further back than that the scrollback was cleared, i.e. by the clear command.
+        // Start checking again from the top otherwise triggers stop firing until as many
+        // lines as were there before have been output again.
+        if (isScrollbackCleared(cursorRow, triggerLastRowChecked, vte.getRowCount())) {
+            resetTriggerPosition();
+        }
 
         //Check that position has moved to warrant check
         if (cursorRow > triggerLastRowChecked || (cursorRow == triggerLastRowChecked && cursorCol > triggerLastColChecked)) {
@@ -4052,6 +4067,7 @@ public:
                 break;
             case SyncInputEventType.RESET_AND_CLEAR:
                 vte.reset(true, true);
+                resetTriggerPosition();
                 checkPromptBuffer();
                 break;
         }

@@ -222,11 +222,7 @@ private:
                 immutable(char*) idz = toStringz(id);
                 ht.insert(cast(void*)attrID, cast(void*)idz);
                 Secret.passwordClearvSync(schema, ht, null);
-                foreach(index, row; rows) {
-                    if (row[1] == id) {
-                        std.algorithm.remove(rows, index);
-                    }
-                }
+                rows = removeRowsWithID(rows, id);
                 ls.remove(selected);
             }
         });
@@ -520,3 +516,11 @@ public:
     }
 
 }
+
+/**
+ * Returns rows, each a [label, id] pair, without the rows for id
+ */
+string[][] removeRowsWithID(string[][] rows, string id) {
+    return std.algorithm.remove!(row => row[1] == id)(rows);
+}
+

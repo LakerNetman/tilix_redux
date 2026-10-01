@@ -103,7 +103,8 @@ class ColorScheme {
 
             return false;
         }
-        if (useThemeColors) {
+        // Background and foreground are only used when not using the theme colors
+        if (!useThemeColors) {
             if (!(equal(scheme.background, this.background) &&
                  equal(scheme.foreground, this.foreground))) {
                      return false;

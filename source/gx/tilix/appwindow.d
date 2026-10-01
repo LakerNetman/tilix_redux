@@ -1514,19 +1514,25 @@ private:
         fcd.setSelectMultiple(true);
         fcd.addOnResponse(delegate(int response, Dialog) {
             if (response == ResponseType.OK) {
-                try {
-                    string[] filenames = fcd.getFilenames().toArray!string();
-                    foreach(filename; filenames) {
+                string[] filenames = fcd.getFilenames().toArray!string();
+                dialogPaths[DialogPath.LOAD_SESSION] = fcd.getCurrentFolder();
+                // Load each file separately so one bad file doesn't stop the others
+                // loading and the recent entry removed is the one that failed
+                string errors;
+                foreach(filename; filenames) {
+                    try {
                         loadSession(filename);
                         addRecentSessionFile(filename);
                     }
-                    dialogPaths[DialogPath.LOAD_SESSION] = fcd.getCurrentFolder();
+                    catch (Exception e) {
+                        removeRecentSessionFile(filename);
+                        error(e);
+                        errors ~= "\n" ~ e.msg;
+                    }
                 }
-                catch (Exception e) {
+                if (errors.length > 0) {
                     fcd.hide();
-                    removeRecentSessionFile(fcd.getFilename());
-                    error(e);
-                    showErrorDialog(this, _("Could not load session due to unexpected error.") ~ "\n" ~ e.msg, _("Error Loading Session"));
+                    showErrorDialog(this, _("Could not load session due to unexpected error.") ~ errors, _("Error Loading Session"));
                 }
             }
             fcd.hide();
@@ -1598,7 +1604,7 @@ private:
         }
         else {
             try {
-                string json = session.serialize().toPrettyString();
+                string json = session.serializeToJSON();
                 write(session.filename, json);
             }
             catch (Exception e) {
