@@ -1813,7 +1813,7 @@ msgid "Transform"
 msgstr ""
 
 #: source/gx/tilix/terminal/advpaste.d:104
-msgid "Convert spaces to tabs"
+msgid "Convert tabs to spaces"
 msgstr ""
 
 #: source/gx/tilix/terminal/advpaste.d:115
