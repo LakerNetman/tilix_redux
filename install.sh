@@ -50,7 +50,7 @@ echo "Installing to prefix $PREFIX"
 # Copy and compile schema
 echo "Copying and compiling schema..."
 install -Dm 644 data/gsettings/com.gexperts.Tilix.gschema.xml -t "$PREFIX/share/glib-2.0/schemas/"
-glib-compile-schemas $PREFIX/share/glib-2.0/schemas/
+glib-compile-schemas "$PREFIX/share/glib-2.0/schemas/"
 
 export TILIX_SHARE="$PREFIX/share/tilix"
 
@@ -79,14 +79,14 @@ echo "Copying and installing localization files"
 for f in po/*.po; do
     echo "Processing $f"
     LOCALE=$(basename "$f" .po)
-    msgfmt $f -o "$LOCALE.mo"
+    msgfmt "$f" -o "$LOCALE.mo"
     install -Dm 644 "$LOCALE.mo" "$PREFIX/share/locale/$LOCALE/LC_MESSAGES/tilix.mo"
     rm -f "$LOCALE.mo"
 done
 
 # Generate desktop file
-msgfmt --desktop --template=data/pkg/desktop/com.gexperts.Tilix.desktop.in -d po -o data/pkg/desktop/com.gexperts.Tilix.desktop
-if [ $? -ne 0 ]; then
+# Test the command directly, with errexit a failure would otherwise exit before the fallback
+if ! msgfmt --desktop --template=data/pkg/desktop/com.gexperts.Tilix.desktop.in -d po -o data/pkg/desktop/com.gexperts.Tilix.desktop; then
     echo "Note that localizating appdata requires a newer version of xgettext, copying instead"
     cp data/pkg/desktop/com.gexperts.Tilix.desktop.in data/pkg/desktop/com.gexperts.Tilix.desktop
 fi
@@ -94,8 +94,7 @@ fi
 desktop-file-validate data/pkg/desktop/com.gexperts.Tilix.desktop
 
 # Generate appdata file, requires xgettext 0.19.7
-msgfmt --xml --template=data/metainfo/com.gexperts.Tilix.appdata.xml.in -d po -o data/metainfo/com.gexperts.Tilix.appdata.xml
-if [ $? -ne 0 ]; then
+if ! msgfmt --xml --template=data/metainfo/com.gexperts.Tilix.appdata.xml.in -d po -o data/metainfo/com.gexperts.Tilix.appdata.xml; then
     echo "Note that localizating appdata requires xgettext 0.19.7 or later, copying instead"
     cp data/metainfo/com.gexperts.Tilix.appdata.xml.in data/metainfo/com.gexperts.Tilix.appdata.xml
 fi
@@ -108,7 +107,7 @@ install -Dm 644 data/nautilus/open-tilix.py -t "$PREFIX/share/nautilus-python/ex
 install -Dm 644 data/dbus/com.gexperts.Tilix.service -t "$PREFIX/share/dbus-1/services/"
 
 # Copy man page
-. $(dirname $(realpath "$0"))/data/scripts/install-man-pages.sh
+. "$(dirname "$(realpath "$0")")/data/scripts/install-man-pages.sh"
 
 # Copy Icons
 cd data/icons/hicolor
