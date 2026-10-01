@@ -129,7 +129,20 @@ tilix_test_exe = executable('tilix_test',
     link_args: d_link_args,
     d_unittest: true
 )
-test('tilix_test', tilix_test_exe)
+# The Flatpak toolbox runs on the host, tilix_test checks it finds the same
+# processes as Tilix does natively when a C compiler is available to build it
+if add_languages('c', required: false, native: false)
+    toolbox_test_exe = executable('tilix-flatpak-toolbox',
+        'experimental/flatpak/tilix-flatpak-toolbox.c',
+        install: false
+    )
+    test('tilix_test', tilix_test_exe,
+        env: ['TILIX_TOOLBOX=' + toolbox_test_exe.full_path()],
+        depends: toolbox_test_exe
+    )
+else
+    test('tilix_test', tilix_test_exe)
+endif
 
 # Script tests, these exit with 77 to be reported as skipped if a tool they need is missing
 test('install_scripts', find_program('sh'),

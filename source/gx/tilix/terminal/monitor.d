@@ -21,6 +21,7 @@ import gx.gtk.threads;
 import gx.tilix.common;
 import gx.tilix.constants;
 import gx.tilix.terminal.activeprocess;
+import gx.tilix.terminal.util : isFlatpak;
 
 import gx.tilix.application;
 
@@ -128,7 +129,9 @@ public:
     void start() {
         running = true;
         generation++;
-        tid = spawn(&monitorProcesses, SLEEP_CONSTANT_MS, thisTid, generation, root);
+        // In a Flatpak the shells run on the host, which the sandbox's /proc can't see
+        bool flatpak = isFlatpak() && root == "/proc";
+        tid = spawn(&monitorProcesses, SLEEP_CONSTANT_MS, thisTid, generation, root, flatpak);
         foreach (gpid; watched.keys) {
             tid.send(Watch(gpid));
         }
@@ -258,8 +261,15 @@ struct MonitorState {
     }
 }
 
-void monitorProcesses(int sleep, Tid owner, uint generation, string root) {
-    ProcessSource source = new ProcFsSource(root);
+void monitorProcesses(int sleep, Tid owner, uint generation, string root, bool flatpak) {
+    ProcessSource source;
+    try {
+        source = flatpak ? cast(ProcessSource) new FlatpakHostSource() : new ProcFsSource(root);
+    } catch (Exception e) {
+        // i.e. the toolbox location can't be found, monitoring isn't possible
+        warning(e);
+        return;
+    }
     MonitorState state;
     bool abort = false;
 

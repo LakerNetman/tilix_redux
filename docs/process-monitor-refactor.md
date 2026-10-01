@@ -1,11 +1,12 @@
 # Proposal: refactor process detection
 
-Status: steps 0–4 of the migration plan are done, step 5 is a proposal. It covers
+Status: all steps of the migration plan, 0–5, are done. Step 5 still needs checking in a real
+Flatpak (test 6 in `tests/manual/flatpak-host-commands.md`). It covers
 `source/gx/tilix/terminal/activeprocess.d` and `source/gx/tilix/terminal/monitor.d`.
 
 ## What the code did before the refactor
 
-This describes the code before steps 0–4. When the hidden `process-monitor` setting is on, Tilix shows the command running in each
+This describes the code before steps 0–5. When the hidden `process-monitor` setting is on, Tilix shows the command running in each
 terminal (the `${process}` title variable):
 
 1. `ProcessMonitor` starts a thread that calls `getActiveProcessList()` every 300 ms.
@@ -25,7 +26,7 @@ terminal (the `${process}` title variable):
 | 2 | **Stale cached data.** A `Process` is parsed once and cached by pid. After `fork` and before `exec`, a child has the shell's name. If the scan catches it in that window, the name stays wrong for the life of the process. Pid reuse has the same effect. | Titles show `bash` instead of `vim` until the command exits. **Fixed in steps 2–3:** there is no cache any more, every scan reads fresh stats, and a change is detected by pid *and* start time, so a pid reused by a new command is noticed. |
 | 3 | **It scans the whole system.** Every 300 ms it lists all of `/proc` and re-reads `stat` for every process with a terminal, not just Tilix's. | Constant background I/O that grows with the number of processes on the machine, including other terminal apps. **Fixed in step 3:** only the watched shells and their descendants are read. |
 | 4 | **The scan runs inside the lock.** All that I/O happens inside `synchronized`, which would block the UI thread's `fireEvents` if the locks worked. | Fixing #1 alone would add UI stalls. **Fixed in step 0.** |
-| 5 | **It doesn't work in Flatpak.** Shells run on the host through `HostCommand`, but the monitor reads the sandbox's `/proc`, which can't see host processes. That's the `TODO: be correct for flatpak sandbox` in `terminal.d`. | `${process}` never works in the Flatpak. |
+| 5 | **It doesn't work in Flatpak.** Shells run on the host through `HostCommand`, but the monitor reads the sandbox's `/proc`, which can't see host processes. That's the `TODO: be correct for flatpak sandbox` in `terminal.d`. | `${process}` never works in the Flatpak. **Fixed in step 5**, but not yet checked in a real Flatpak. |
 | 6 | **A failure stops monitoring.** An exception in the spawned thread, such as a `to!long` on unexpected `stat` content, ends the thread and nothing restarts it. | Monitoring stops for the rest of the session. **Fixed in step 2:** each scan is wrapped in `try`/`catch`. |
 | 7 | **It can't be tested.** It reads the real `/proc` into static global state from another thread. | This is why it was left out of the new unit tests. **Fixed in steps 1–2:** the logic is pure functions, and the monitor takes a `ProcessSource` that tests can fake. |
 | 8 | **Event types are unused.** `MonitorEventType` has `CHANGED` and `FINISHED`, but only `STARTED` is ever emitted. When a command exits, the idle shell becomes the active process and is reported as `STARTED`. | Titles are correct, but handlers can't tell a command finishing from one starting. **Fixed in step 4:** `STARTED`, `CHANGED` and `FINISHED` are all emitted. |
@@ -67,7 +68,7 @@ These functions have no I/O and no global state. The unit tests cover:
 Step 3 added tests for pid reuse detected through `startTime`. Zombies aren't tested: they keep
 their stat until reaped and are normally reaped by the shell straight away.
 
-### 2. A pluggable process source (done in step 2, except `FlatpakHostSource`)
+### 2. A pluggable process source (done in steps 2 and 5)
 
 ```d
 interface ProcessSource {
@@ -79,10 +80,19 @@ interface ProcessSource {
 - **`ProcFsSource(string root = "/proc")`** is the native case. Tests point `root` at a temp
   folder holding fake `stat` and `children` files. Since step 3 it reads only the watched shells
   and their descendants, see below.
-- **`FlatpakHostSource`** adds a toolbox subcommand, `tilix-flatpak-toolbox list-sessions <pid>...`.
-  It prints the `stat` line of each shell and of its foreground process group in **one** host
-  command per scan. Calling `get-proc-stat` per process instead would mean dozens of D-Bus round
-  trips every 300 ms. This fixes problem 5.
+- **`FlatpakHostSource`** (step 5) runs a new toolbox subcommand on the host,
+  `tilix-flatpak-toolbox list-sessions <pid>...`. It prints the `stat` line of each shell and of
+  its descendants in **one** host command per scan, found the same way as `ProcFsSource`: every
+  thread's `children` file, skipping other sessions, and falling back to the whole session
+  without `children` files. Calling `get-proc-stat` per process instead would mean dozens of
+  round trips every 300 ms. This fixes problem 5.
+
+  It runs through **`flatpak-spawn --host`**, not Tilix's own `HostCommand` D-Bus code as first
+  planned. That code works on the UI thread and spins the main loop while it waits for the
+  command, which can't be done from the monitor thread. `flatpak-spawn` is a plain blocking call.
+  `runWithTimeout` reads the output as it arrives and kills the command after 2 seconds, so a
+  stuck host command can't hang monitoring. The monitor uses this source when Tilix runs as a
+  Flatpak (`/.flatpak-info` exists), and `ProcFsSource` otherwise.
 - **`FakeSource`** is a test double for the monitor itself. The monitor's scan loop body is now
   `scanProcesses(ProcessSource)`, which the unit tests drive with one.
 
@@ -167,7 +177,7 @@ Each step can ship on its own and keeps today's behaviour until the last one.
 | 2 | **Done.** Added `ProcessSource` and `ProcFsSource` with a configurable root, plus `scanProcesses(ProcessSource)` in the monitor, with each scan inside `try`/`catch`. | Low | Fake `/proc` in a temp folder, and `FakeSource`-driven monitor tests |
 | 3 | **Done.** Read only the watched shells and their descendants through the `children` files, with a fallback to a full scan, no cache, and changes detected by pid and start time. | Medium: pipelines and job control need care | Fake `/proc` covering pipelines, nested commands, children of other threads, background jobs, `sh -c`, other sessions, exited children, the fallback and pid reuse, plus a check that an idle terminal reads only its shell. Compared with step 2 on a live system |
 | 4 | **Done.** Message passing between the threads, with no shared state or locks, generation numbers for stale results, and `STARTED`/`CHANGED`/`FINISHED` events. | Medium | Pure tests for the event types and for when the monitor thread sends; tests of the UI side with injected messages (stale and superseded results, handlers removing processes); and a test with a real monitor thread against a fake `/proc`, passing 30 out of 30 runs, 5 of them with every CPU core busy |
-| 5 | Add the `list-sessions` toolbox subcommand and `FlatpakHostSource`. | Medium: needs the Flatpak manual test | Parsing unit-tested; the rest follows `tests/manual/flatpak-host-commands.md` |
+| 5 | **Done.** Added the `list-sessions` toolbox subcommand, `FlatpakHostSource` run through `flatpak-spawn --host`, and `runWithTimeout`. | Medium: needs the Flatpak manual test | Unit tests for parsing the output, the command line and `runWithTimeout`, covering large output, failures and timeouts. meson builds the toolbox when a C compiler is available, and a test checks it finds the same active processes as `ProcFsSource` on the live system, with extra test terminal sessions. Not yet checked in a real Flatpak; see test 6 in `tests/manual/flatpak-host-commands.md` |
 
 A rough size: step 0 is a few lines. Steps 1–2 are about a day each, including tests. Steps 3–5
 are about 2–3 days together, plus manual Flatpak testing.

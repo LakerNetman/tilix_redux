@@ -14,6 +14,9 @@ import std.file;
 import std.path;
 import std.string;
 import std.typecons : Nullable;
+import std.utf : validate;
+
+import core.time : Duration, seconds;
 
 /**
  * The fields of /proc/<pid>/stat used to find the active process of a terminal
@@ -298,6 +301,120 @@ public:
     }
 }
 
+/**
+ * Runs a command and returns what it writes to stdout.
+ *
+ * Throws: an Exception if it can't be started, exits with a non zero status or takes
+ * longer than timeout, in which case it is killed.
+ */
+string runWithTimeout(string[] args, Duration timeout) {
+    import core.stdc.errno : EINTR, errno;
+    import core.sys.posix.poll : poll, pollfd, POLLIN;
+    import core.sys.posix.unistd : posixRead = read;
+    import core.time : MonoTime;
+    import std.array : appender;
+    import std.exception : ErrnoException;
+    import std.process : kill, pipeProcess, Redirect, tryWait, wait;
+
+    auto pipes = pipeProcess(args, Redirect.stdout);
+    scope(exit) {
+        if (!tryWait(pipes.pid).terminated) {
+            kill(pipes.pid);
+            wait(pipes.pid);
+        }
+    }
+    // Output is read as it arrives, a command writing more than the pipe holds
+    // would otherwise block before exiting
+    int fd = pipes.stdout.fileno;
+    MonoTime deadline = MonoTime.currTime + timeout;
+    auto output = appender!string();
+    ubyte[4096] buffer;
+    while (true) {
+        Duration left = deadline - MonoTime.currTime;
+        if (left <= Duration.zero) {
+            throw new Exception(format("%s took longer than %s", args[0], timeout));
+        }
+        pollfd pfd = pollfd(fd, POLLIN);
+        int ready = poll(&pfd, 1, cast(int) max(1, left.total!"msecs"));
+        if (ready < 0 && errno != EINTR) throw new ErrnoException("poll failed");
+        if (ready <= 0) continue;
+        auto count = posixRead(fd, buffer.ptr, buffer.length);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            throw new ErrnoException("read failed");
+        }
+        if (count == 0) break;
+        output.put(cast(const(char)[]) buffer[0 .. count]);
+    }
+    int status = wait(pipes.pid);
+    if (status != 0) {
+        throw new Exception(format("%s exited with status %d", args[0], status));
+    }
+    return output.data;
+}
+
+/**
+ * Reads process stats on the host when Tilix runs as a Flatpak.
+ *
+ * The sandbox has its own /proc which can't see the shells, they run on the host.
+ * Instead tilix-flatpak-toolbox list-sessions is run on the host with flatpak-spawn,
+ * one command per scan, and prints the stat line of each shell and its descendants
+ * in its session. It finds them the same way as ProcFsSource.
+ */
+class FlatpakHostSource: ProcessSource {
+private:
+    string[] command;
+    string delegate(string[] args) run;
+
+    /// The toolbox installed in the Flatpak's app directory, as seen from the host
+    static string toolboxPath() {
+        string section;
+        foreach (line; readText("/.flatpak-info").lineSplitter) {
+            line = line.strip();
+            if (line.startsWith("[")) {
+                section = line;
+            } else if (section == "[Instance]" && line.startsWith("app-path=")) {
+                return buildPath(line["app-path=".length .. $], "bin", "tilix-flatpak-toolbox");
+            }
+        }
+        throw new FileException("/.flatpak-info", "No app-path in the Instance section");
+    }
+
+public:
+    /// Runs the toolbox in the Flatpak's app directory on the host
+    this() {
+        this(["flatpak-spawn", "--host", toolboxPath(), "list-sessions"],
+             (string[] args) => runWithTimeout(args, 2.seconds));
+    }
+
+    /**
+     * Params:
+     *  command = The command listing the sessions, the shell pids are appended to it
+     *  run     = Runs a command and returns its output, tests replace it
+     */
+    this(string[] command, string delegate(string[] args) run) {
+        this.command = command;
+        this.run = run;
+    }
+
+    ProcStat[] snapshot(const pid_t[] shells) {
+        if (shells.length == 0) return [];
+        string output = run(command ~ shells.map!(pid => to!string(pid)).array);
+        ProcStat[] result;
+        foreach (line; output.lineSplitter) {
+            // ProcFsSource skips processes whose stat isn't valid UTF-8, do the same
+            try {
+                validate(line);
+            } catch (Exception e) {
+                continue;
+            }
+            Nullable!ProcStat stat = parseStat(line);
+            if (!stat.isNull) result ~= stat.get;
+        }
+        return result;
+    }
+}
+
 // Parsing stat files
 unittest {
     string line(string pidAndName, string rest) {
@@ -545,4 +662,110 @@ unittest {
     active = activeProcesses(source.snapshot([100, 110, 120]));
     assert(active[100].name == "vim" && active[110].name == "top" && active[120].name == "sleep");
     assert(source.reads.canFind(500), "The fallback reads every process");
+}
+
+// Reading stats through the Flatpak toolbox output
+unittest {
+    string[][] calls;
+    string output;
+    string fakeRun(string[] args) {
+        calls ~= args;
+        return output;
+    }
+
+    FlatpakHostSource source = new FlatpakHostSource(["flatpak-spawn", "--host", "/app/bin/tilix-flatpak-toolbox", "list-sessions"], &fakeRun);
+
+    // Nothing to watch, nothing is run
+    assert(source.snapshot([]).length == 0);
+    assert(calls.length == 0);
+
+    output = "100 (bash) S 1 100 100 34816 300 0 0 0 0 0 0 0 0 0 20 0 1 0 7 0 0\n" ~
+             "300 (vim) S 100 300 100 34816 300 0 0 0 0 0 0 0 0 0 20 0 1 0 9 0 0\n" ~
+             "garbage\n" ~
+             "301 (\xff\xfe) S 100 300 100 34816 300 0 0 0 0 0 0 0 0 0 20 0 1 0 9 0 0\n" ~
+             "\n";
+    ProcStat[] stats = source.snapshot([100, 110]);
+    assert(calls == [["flatpak-spawn", "--host", "/app/bin/tilix-flatpak-toolbox", "list-sessions", "100", "110"]]);
+    // The garbage line and the one that isn't valid UTF-8 are skipped
+    assert(stats.map!(s => s.name).array == ["bash", "vim"]);
+    assert(activeProcesses(stats)[100].name == "vim");
+}
+
+// Running commands with a time limit
+unittest {
+    import core.time : msecs;
+    import std.datetime.stopwatch : AutoStart, StopWatch;
+    import std.exception : assertThrown;
+
+    assert(runWithTimeout(["sh", "-c", "printf 'one\\ntwo\\n'"], 5.seconds) == "one\ntwo\n");
+    assert(runWithTimeout(["true"], 5.seconds) == "");
+    // More output than a pipe holds is read while the command runs
+    assert(runWithTimeout(["sh", "-c", "yes 0123456789 | head -n 100000"], 10.seconds).length == 1_100_000);
+    // A failing or missing command throws
+    assertThrown(runWithTimeout(["sh", "-c", "exit 3"], 5.seconds));
+    assertThrown(runWithTimeout(["/nonexistent/command"], 5.seconds));
+    // A command that takes too long is killed rather than waited for
+    auto sw = StopWatch(AutoStart.yes);
+    assertThrown(runWithTimeout(["sleep", "10"], 300.msecs));
+    assert(sw.peek() < 5.seconds);
+}
+
+// The Flatpak toolbox finds the same processes as ProcFsSource. meson builds the
+// toolbox and passes its path in TILIX_TOOLBOX when a C compiler is available.
+unittest {
+    import core.thread : Thread;
+    import core.time : msecs;
+    import std.process : environment, Pid, Redirect, pipeProcess, kill, wait;
+    import std.range : walkLength;
+
+    string toolbox = environment.get("TILIX_TOOLBOX");
+    if (toolbox.length == 0) return;
+
+    // Terminal sessions running a command, a pipeline, a shell without job control and
+    // an idle shell, if script is available to create them
+    Pid[] sessions;
+    // script waits a moment for its shell after being signalled, so signal them all
+    // before waiting for any
+    scope(exit) {
+        foreach (pid; sessions) kill(pid);
+        foreach (pid; sessions) wait(pid);
+    }
+    if (exists("/usr/bin/script")) {
+        foreach (command; ["sleep 30", "sleep 30 | cat", "sh -c 'sh -c \"sleep 30\"'", "bash --norc"]) {
+            sessions ~= pipeProcess(["/usr/bin/script", "-qfc", command, "/dev/null"], Redirect.all).pid;
+        }
+        Thread.sleep(500.msecs);
+    }
+
+    // Shells as Tilix would watch them: session leaders with a terminal
+    pid_t[] shells;
+    foreach (entry; dirEntries("/proc", SpanMode.shallow)) {
+        if (!baseName(entry.name).isNumeric) continue;
+        try {
+            auto stat = parseStat(readText(buildPath(entry.name, "stat")));
+            if (!stat.isNull && stat.get.ttyNr > 0 && stat.get.session == stat.get.pid) shells ~= stat.get.pid;
+        } catch (Exception e) {}
+    }
+
+    string[string] describe(ProcStat[pid_t] active) {
+        string[string] result;
+        foreach (shell, stat; active) result[to!string(shell)] = stat.name ~ "/" ~ to!string(stat.pid);
+        return result;
+    }
+
+    ProcFsSource proc = new ProcFsSource();
+    FlatpakHostSource host = new FlatpakHostSource([toolbox, "list-sessions"], (string[] args) => runWithTimeout(args, 5.seconds));
+    // Processes can change between the two reads, so allow a few attempts
+    string[string] expected, actual;
+    foreach (attempt; 0 .. 5) {
+        expected = describe(activeProcesses(proc.snapshot(shells)));
+        actual = describe(activeProcesses(host.snapshot(shells)));
+        if (expected == actual) break;
+        Thread.sleep(100.msecs);
+    }
+    assert(expected == actual, format("ProcFsSource %s, toolbox %s", expected, actual));
+    if (sessions.length > 0) {
+        // The sessions created above were found
+        assert(expected.byValue.filter!(v => v.startsWith("sleep/")).walkLength >= 2, format("%s", expected));
+    }
 }
