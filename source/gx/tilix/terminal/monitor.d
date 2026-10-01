@@ -185,14 +185,15 @@ void scanProcesses(ProcessSource source) {
     // Reading the processes is slow so it is done without holding the lock
     ProcStat[pid_t] active = activeProcesses(source.snapshot(shells));
     synchronized (processesLock) {
-        pid_t[pid_t] lastSeen;
-        foreach (process; processes) lastSeen[process.gpid] = process.activePid;
+        ProcessId[pid_t] lastSeen;
+        foreach (process; processes) lastSeen[process.gpid] = ProcessId(process.activePid, process.activeStartTime);
         foreach (change; diffActiveProcesses(lastSeen, active)) {
             // The process may have been removed while scanning
             auto process = change.shell in processes;
             if (process is null) continue;
             (*process).activeName = change.name;
             (*process).activePid = change.pid;
+            (*process).activeStartTime = change.startTime;
             (*process).eventType = MonitorEventType.STARTED;
         }
     }
@@ -204,6 +205,7 @@ void scanProcesses(ProcessSource source) {
 shared class ProcessStatus {
     GPid gpid;
     pid_t activePid = -1;
+    ulong activeStartTime;
     string activeName = "";
     MonitorEventType eventType = MonitorEventType.NONE;
 
@@ -271,8 +273,8 @@ unittest {
         }
     }
 
-    ProcStat proc(pid_t pid, string name, pid_t session, pid_t tpgid) {
-        return ProcStat(pid, name, session, pid, session, 34816, tpgid, 0);
+    ProcStat proc(pid_t pid, string name, pid_t session, pid_t tpgid, ulong startTime = 0) {
+        return ProcStat(pid, name, session, pid, session, 34816, tpgid, startTime);
     }
 
     MonitorEventType[GPid] events() {
@@ -321,4 +323,14 @@ unittest {
     scanProcesses(source);
     assert(events() == [100: MonitorEventType.NONE, 110: MonitorEventType.NONE]);
     assert(activeName(100) == "vim");
+
+    // vim exits and a new command reuses its pid, the different start time shows
+    // it is a different process
+    source.stats = [proc(100, "bash", 100, 300), proc(300, "less", 100, 300, 7),
+                    proc(110, "zsh", 110, 201), proc(201, "top", 110, 201)];
+    scanProcesses(source);
+    assert(events() == [100: MonitorEventType.STARTED, 110: MonitorEventType.NONE]);
+    assert(activeName(100) == "less");
+    scanProcesses(source);
+    assert(events() == [100: MonitorEventType.NONE, 110: MonitorEventType.NONE]);
 }
