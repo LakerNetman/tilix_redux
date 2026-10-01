@@ -145,7 +145,11 @@ void threadsAddIdleDelegate(T, parameterTuple...)(T theDelegate, parameterTuple 
 private extern(C) nothrow void removeDelegatePointerRoot(void* data)
 {
 	GC.removeRoot(data);
+	version(unittest) delegateRootsReleased++;
 }
+
+// Lets the unit tests check that every root added is released
+version(unittest) private __gshared int delegateRootsReleased;
 
 /**
  * Convenience method that allows scheduling a delegate to be executed with gdk.Threads.threadsAddTimeout instead of a
@@ -202,4 +206,50 @@ uint threadsAddTimeoutDelegate(T, parameterTuple...)(uint interval, T theDelegat
 		delegatePointer,
 		cast(GDestroyNotify) &removeDelegatePointerRoot
 		);
+}
+
+unittest {
+	import core.thread : Thread;
+	import core.time : Duration, msecs;
+	import std.datetime.stopwatch : AutoStart, StopWatch;
+	import glib.MainContext;
+	import gtkc.glib;
+
+	MainContext context = MainContext.default_();
+	void iterateFor(Duration duration) {
+		auto sw = StopWatch(AutoStart.yes);
+		while (sw.peek() < duration) {
+			while (context.iteration(false)) {}
+			Thread.sleep(1.msecs);
+		}
+	}
+
+	int released = delegateRootsReleased;
+
+	// Fires once when the delegate returns false and releases its root
+	int fired;
+	bool delegate() once = () { fired++; return false; };
+	uint id = threadsAddTimeoutDelegate(1, once);
+	assert(id > 0);
+	iterateFor(100.msecs);
+	assert(fired == 1);
+	assert(delegateRootsReleased == released + 1);
+
+	// Repeats while the delegate returns true
+	int repeats;
+	bool delegate() repeat = () { return ++repeats < 3; };
+	threadsAddTimeoutDelegate(1, repeat);
+	iterateFor(200.msecs);
+	assert(repeats == 3);
+	assert(delegateRootsReleased == released + 2);
+
+	// Removed before it fires, never runs and the root is still released,
+	// previously this leaked the delegate and everything it referenced
+	int removed;
+	bool delegate() cancelled = () { removed++; return false; };
+	id = threadsAddTimeoutDelegate(50, cancelled);
+	g_source_remove(id);
+	assert(delegateRootsReleased == released + 3);
+	iterateFor(150.msecs);
+	assert(removed == 0);
 }

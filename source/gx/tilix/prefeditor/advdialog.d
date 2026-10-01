@@ -465,3 +465,18 @@ string validateTriggerAction(string[string] localizedActions, string localized) 
     return _("An action must be selected");
 }
 
+unittest {
+    string[string] actions = localizedTriggerActions();
+    assert(actions.length == SETTINGS_PROFILE_TRIGGER_ACTION_VALUES.length);
+    // Every action maps back to its settings value
+    foreach(value; SETTINGS_PROFILE_TRIGGER_ACTION_VALUES) {
+        assert(triggerActionValue(actions, _(value)) == value);
+        assert(validateTriggerAction(actions, _(value)) is null);
+    }
+    // New rows have no action, stored triggers may have one edited by hand
+    assert(triggerActionValue(actions, "") is null);
+    assert(triggerActionValue(actions, null) is null);
+    assert(triggerActionValue(actions, "NoSuchAction") is null);
+    assert(validateTriggerAction(actions, "").length > 0);
+    assert(validateTriggerAction(actions, "NoSuchAction").length > 0);
+}

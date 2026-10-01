@@ -1967,3 +1967,48 @@ class PanedNode {
         this.paned = paned;
     }
 }
+
+// Reading session files only ever throws SessionCreationException
+unittest {
+    import std.exception : assertNotThrown, collectException;
+    import std.file : mkdirRecurse, rmdirRecurse, tempDir, write;
+    import std.path : buildPath;
+    import std.process : thisProcessID;
+
+    string dir = buildPath(tempDir(), "tilix-session-test-" ~ to!string(thisProcessID()));
+    mkdirRecurse(dir);
+    scope(exit) rmdirRecurse(dir);
+
+    void assertInvalid(string filename) {
+        Exception e = collectException(Session.readSessionFile(filename));
+        assert(e !is null, "Expected an exception for " ~ filename);
+        assert(cast(SessionCreationException) e !is null, "Wrong exception type for " ~ filename ~ ": " ~ e.classinfo.name);
+    }
+
+    string file(string name, const(void)[] content) {
+        string filename = buildPath(dir, name);
+        write(filename, content);
+        return filename;
+    }
+
+    assertInvalid(buildPath(dir, "missing.json"));
+    assertInvalid(dir);
+    assertInvalid(file("binary.json", cast(ubyte[]) [0xff, 0xfe, 0x00, 0xc3]));
+    assertInvalid(file("empty.json", ""));
+    assertInvalid(file("invalid.json", "{ \"name\": "));
+    assertInvalid(file("array.json", "[1, 2, 3]"));
+    assertInvalid(file("nochild.json", `{"name": "Test", "width": 800, "height": 600}`));
+    assertInvalid(file("badchild.json", `{"name": "Test", "child": "terminal"}`));
+    assertInvalid(file("noname.json", `{"child": {"type": "Terminal"}}`));
+
+    string valid = file("valid.json", `{"name": "Test", "width": 800, "height": 600, "child": {"type": "Terminal"}}`);
+    JSONValue value;
+    assertNotThrown(value = Session.readSessionFile(valid));
+
+    // Persisted size
+    int width, height;
+    Session.getPersistedSessionSize(value, width, height);
+    assert(width == 800 && height == 600);
+    Exception e = collectException(Session.getPersistedSessionSize(parseJSON(`{"width": "wide"}`), width, height));
+    assert(cast(SessionCreationException) e !is null);
+}

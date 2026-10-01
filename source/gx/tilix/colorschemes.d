@@ -295,3 +295,32 @@ private void parseColor(RGBA rgba, string value) {
         return;
     rgba.parse(value);
 }
+
+// Foreground and background only matter when not using the theme colors
+unittest {
+    ColorScheme makeScheme(string fg, string bg, bool useThemeColors) {
+        ColorScheme cs = new ColorScheme();
+        cs.useThemeColors = useThemeColors;
+        parseColor(cs.foreground, fg);
+        parseColor(cs.background, bg);
+        return cs;
+    }
+
+    ColorScheme dark = makeScheme("#839496", "#002B36", false);
+    ColorScheme light = makeScheme("#657B83", "#FDF6E3", false);
+    assert(!dark.equalColor(light));
+    assert(dark.equalColor(makeScheme("#839496", "#002B36", false)));
+
+    // With theme colors the scheme's own foreground and background are ignored
+    assert(makeScheme("#839496", "#002B36", true).equalColor(makeScheme("#657B83", "#FDF6E3", true)));
+    // Using theme colors or not is itself a difference
+    assert(!makeScheme("#839496", "#002B36", true).equalColor(dark));
+
+    // The bundled Solarized schemes differ only in foreground and background
+    string schemes = buildNormalizedPath(dirName(__FILE_FULL_PATH__), "..", "..", "..", "data", "schemes");
+    ColorScheme solarizedDark = loadScheme(buildPath(schemes, "solarized-dark.json"));
+    ColorScheme solarizedLight = loadScheme(buildPath(schemes, "solarized-light.json"));
+    assert(!solarizedDark.equalColor(solarizedLight));
+    assert(!solarizedLight.equalColor(solarizedDark));
+    assert(solarizedDark.equalColor(loadScheme(buildPath(schemes, "solarized-dark.json"))));
+}

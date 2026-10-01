@@ -319,6 +319,96 @@ unittest {
            "\"'${TILIX_TOKEN_0}'\" '\"'\"${TILIX_TOKEN_1}\"'\"'");
 }
 
+// Runs prepared commands through a real shell to check untrusted values can't inject commands
+unittest {
+    import std.file : exists, remove, tempDir;
+    import std.path : buildPath;
+    import std.process : execute, thisProcessID;
+
+    string marker = buildPath(tempDir(), "tilix-injection-test-" ~ to!string(thisProcessID()));
+    string[] payloads = [
+        "hello world",
+        "'; touch " ~ marker ~ "; '",
+        "\"; touch " ~ marker ~ "; \"",
+        "$(touch " ~ marker ~ ")",
+        "`touch " ~ marker ~ "`",
+        "trailing backslash\\",
+        "\\'; touch " ~ marker ~ " #",
+        "new\nline; touch " ~ marker,
+        "*",
+        "${HOME} $1 ${title}",
+        "%s %d",
+        ""
+    ];
+    // Template and the expected output with the value in place of @
+    string[2][] templates = [
+        ["printf '[%s]' $1", "[@]"],
+        ["printf '[%s]' '$1'", "[@]"],
+        ["printf '[%s]' \"$1\"", "[@]"],
+        ["printf '[%s]' \"pre $1 post\"", "[pre @ post]"],
+        ["printf '[%s]' 'pre $1 post'", "[pre @ post]"],
+        ["printf '[%s]' ${title}", "[@]"],
+        ["printf '[%s]' \"\\\"$1\\\"\"", "[\"@\"]"]
+    ];
+    foreach (payload; payloads) {
+        foreach (t; templates) {
+            if (exists(marker)) remove(marker);
+            ShellCommand sc = prepareShellCommand(t[0], ["x", "x", payload], ["${title}": payload]);
+            auto result = execute(["/bin/sh", "-c", sc.command], sc.env);
+            assert(result.status == 0, "Command failed: " ~ sc.command ~ "\n" ~ result.output);
+            assert(result.output == t[1].replace("@", payload), "Unexpected output for " ~ t[0] ~ ": " ~ result.output);
+            assert(!exists(marker), "Payload was executed: " ~ payload);
+        }
+    }
+}
+
+// Template edge cases
+unittest {
+    string[] matches = ["whole", "whole", "one"];
+    // Escaped quotes inside double quotes don't end the quoted string
+    assert(prepareShellCommand("echo \"\\\"$1\\\"\"", matches, null).command == "echo \"\\\"${TILIX_TOKEN_0}\\\"\"");
+    // A trailing backslash, a lone $ and $ followed by a non digit are left as is
+    ShellCommand sc = prepareShellCommand("echo $1 $ $x \\", matches, null);
+    assert(sc.command == "echo \"${TILIX_TOKEN_0}\" $ $x \\");
+    assert(sc.env.length == 1);
+    // Escaped tokens are not substituted
+    assert(prepareShellCommand("echo \\$1 \"\\$1\"", matches, null).env.length == 0);
+    // No tokens gives the command unchanged
+    assert(prepareShellCommand("ls -l", matches, null).command == "ls -l");
+    assert(prepareShellCommand("", matches, null).command == "");
+}
+
+// Token bounds
+unittest {
+    string[] matches = ["whole", "whole", "one", "two"];
+    // Huge group numbers don't overflow and unknown groups stay literal
+    assert(replaceTokens("$99999999999", matches, null) == "$99999999999");
+    assert(replaceTokens("$3 $9 $", matches, null) == "$3 $9 $");
+    assert(replaceTokens("$2$1$0", matches, null) == "twoonewhole");
+    // No matches at all
+    assert(replaceTokens("$0 $1", null, null) == "$0 $1");
+    // Unterminated and unknown variables are left as is
+    assert(replaceTokens("${title ${nope}", null, ["${title}": "t"]) == "${title ${nope}");
+}
+
+// replaceMatchTokens gives the same results as the original implementation
+// for $0..$9 where the values don't contain further tokens
+unittest {
+    string original(string text, string[] matches) {
+        string result = text;
+        foreach(i, match; matches) {
+            result = result.replace("$" ~ to!string(i - 1), match);
+        }
+        return result;
+    }
+
+    string[] matches = ["all of it", "all of it", "a", "b", "c", "d", "e", "f", "g", "h", "i"];
+    string[] texts = ["$0", "$1-$2", "$9 $8 $7", "x$3y$4z", "no tokens", "$5$5$5", "$6 and $1 again", ""];
+    foreach (text; texts) {
+        assert(replaceMatchTokens(text, matches) == original(text, matches), text);
+    }
+}
+
 /**
  * Struct used to track matches in terminal for cases like context menu
  * where we need to preserve state between finding match and performing action

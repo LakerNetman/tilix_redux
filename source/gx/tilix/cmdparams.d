@@ -416,3 +416,60 @@ public:
         return _group;
     }
 }
+
+// Geometry parsing
+unittest {
+    Geometry g = parseGeometryString("800x600+10-20");
+    assert(g.flag == GeometryFlag.FULL);
+    assert(g.width == 800 && g.height == 600 && g.x == 10 && g.y == -20);
+    assert(!g.xNegative && g.yNegative);
+
+    // -0 is a position relative to the right edge so the sign matters
+    g = parseGeometryString("80x24-0+0");
+    assert(g.flag == GeometryFlag.FULL && g.x == 0 && g.xNegative && !g.yNegative);
+
+    g = parseGeometryString("800x600");
+    assert(g.flag == GeometryFlag.PARTIAL && g.width == 800 && g.height == 600);
+
+    // Numbers too large and invalid strings are rejected rather than throwing
+    assert(parseGeometryString("99999999999x10").flag == GeometryFlag.NONE);
+    assert(parseGeometryString("800x600+99999999999+0").flag == GeometryFlag.NONE);
+    assert(parseGeometryString("garbage").flag == GeometryFlag.NONE);
+    assert(parseGeometryString("800x").flag == GeometryFlag.NONE);
+    assert(parseGeometryString("").flag == GeometryFlag.NONE);
+}
+
+// Joining -e/-x arguments keeps each argument intact
+unittest {
+    string[][] cases = [
+        ["echo", "it's"],
+        ["printf", "%s\\n", "x"],
+        ["sh", "-c", "echo $HOME; ls | wc -l"],
+        ["cmd", "", " leading", "trailing "],
+        ["vim", "my file", "ü"],
+        ["echo", "\"quoted\"", "back\\slash", "*", "~"]
+    ];
+    foreach (args; cases) {
+        string[] parsed;
+        assert(ShellUtils.shellParseArgv(joinCommandArgs(args), parsed), joinCommandArgs(args));
+        assert(parsed == args, joinCommandArgs(args));
+    }
+    // Plain words are left unquoted
+    assert(joinCommandArgs(["vim", "-n", "file.txt", "user@host:/path", "a=b,c"]) == "vim -n file.txt user@host:/path a=b,c");
+    assert(joinCommandArgs([]) == "");
+}
+
+// Group argument parsing
+unittest {
+    assert(findGroupArg(["tilix"]) is null);
+    assert(findGroupArg(["tilix", "-g"]) is null);
+    assert(findGroupArg(["tilix", "--group"]) is null);
+    assert(findGroupArg(["tilix", "--group="]) == "");
+    assert(findGroupArg(["tilix", "--group=work"]) == "work");
+    assert(findGroupArg(["tilix", "--group", "work"]) == "work");
+    assert(findGroupArg(["tilix", "-g", "work", "-w", "/tmp"]) == "work");
+    // The last one wins
+    assert(findGroupArg(["tilix", "-g", "a", "--group=b"]) == "b");
+    // Other options starting with --group aren't mistaken for it
+    assert(findGroupArg(["tilix", "--groupx"]) is null);
+}

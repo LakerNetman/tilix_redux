@@ -131,4 +131,16 @@ tilix_test_exe = executable('tilix_test',
 )
 test('tilix_test', tilix_test_exe)
 
+# Script tests, these exit with 77 to be reported as skipped if a tool they need is missing
+test('install_scripts', find_program('sh'),
+    args: [files('tests/test-install.sh'), meson.current_source_dir()],
+    timeout: 300
+)
+python3 = find_program('python3', required: false)
+if python3.found()
+    test('nautilus_quoting', python3,
+        args: [files('tests/test-nautilus-quoting.py')]
+    )
+endif
+
 meson.add_install_script('meson_post_install.py')

@@ -721,3 +721,11 @@ int sessionRowForKey(uint keyval) {
     return (num == -1) ? 9 : num;
 }
 
+unittest {
+    assert(sessionRowForKey(GdkKeysyms.GDK_1) == 0);
+    assert(sessionRowForKey(GdkKeysyms.GDK_5) == 4);
+    assert(sessionRowForKey(GdkKeysyms.GDK_9) == 8);
+    assert(sessionRowForKey(GdkKeysyms.GDK_0) == 9);
+    assert(sessionRowForKey(GdkKeysyms.GDK_a) == -1);
+    assert(sessionRowForKey(GdkKeysyms.GDK_Escape) == -1);
+}

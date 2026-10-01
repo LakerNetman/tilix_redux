@@ -68,3 +68,16 @@ bool isScrollbackCleared(long cursorRow, long lastRowChecked, long rowCount) {
     return cursorRow < lastRowChecked - rowCount;
 }
 
+unittest {
+    // Cursor moving within the screen, i.e. a progress bar redrawing lines
+    assert(!isScrollbackCleared(1000, 1000, 24));
+    assert(!isScrollbackCleared(990, 1000, 24));
+    assert(!isScrollbackCleared(976, 1000, 24));
+    // Back further than a screen height
+    assert(isScrollbackCleared(975, 1000, 24));
+    assert(isScrollbackCleared(0, 1000, 24));
+    // Nothing checked yet
+    assert(!isScrollbackCleared(0, -1, 24));
+    // Output moving forward
+    assert(!isScrollbackCleared(1100, 1000, 24));
+}

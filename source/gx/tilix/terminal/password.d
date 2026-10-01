@@ -524,3 +524,16 @@ string[][] removeRowsWithID(string[][] rows, string id) {
     return std.algorithm.remove!(row => row[1] == id)(rows);
 }
 
+unittest {
+    string[][] rows() {
+        return [["A", "1"], ["B", "2"], ["C", "3"]];
+    }
+    assert(removeRowsWithID(rows(), "1") == [["B", "2"], ["C", "3"]]);
+    assert(removeRowsWithID(rows(), "2") == [["A", "1"], ["C", "3"]]);
+    assert(removeRowsWithID(rows(), "3") == [["A", "1"], ["B", "2"]]);
+    assert(removeRowsWithID(rows(), "missing") == rows());
+    assert(removeRowsWithID([["A", "1"]], "1").length == 0);
+    assert(removeRowsWithID(null, "1").length == 0);
+    // Duplicate ids are all removed
+    assert(removeRowsWithID([["A", "1"], ["A again", "1"], ["B", "2"]], "1") == [["B", "2"]]);
+}

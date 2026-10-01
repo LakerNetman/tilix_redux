@@ -771,3 +771,164 @@ unittest {
     FolderBookmark test = new FolderBookmark();
     test.deserialize(json);
 }
+// Path bookmark commands reach the exact directory even with shell special characters
+unittest {
+    import std.process : Config, execute, thisProcessID;
+
+    initBookmarkManager();
+    string markerName = "tilix-bm-marker-" ~ to!string(thisProcessID());
+    string dir = buildPath(tempDir(), "tilix-bm Tom's $HOME; touch " ~ markerName ~ " & `touch " ~ markerName ~ "`");
+    mkdirRecurse(dir);
+    scope(exit) rmdirRecurse(dir);
+
+    PathBookmark pb = new PathBookmark("Odd", dir);
+    auto result = execute(["/bin/sh", "-c", pb.terminalCommand ~ " && pwd"], null, Config.none, size_t.max, tempDir());
+    assert(result.status == 0, result.output);
+    assert(result.output == dir ~ "\n", result.output);
+    assert(!exists(buildPath(tempDir(), markerName)));
+}
+
+// The SSH remote command reaches ssh as a single argument
+unittest {
+    import std.process : execute;
+
+    // Returns the arguments the shell passes to the command, each in []
+    string arguments(string command) {
+        auto result = execute(["/bin/sh", "-c", "set -- " ~ command.findSplitAfter(" ")[1] ~ "; printf '[%s]' \"$@\""]);
+        assert(result.status == 0, result.output);
+        return result.output;
+    }
+
+    initBookmarkManager();
+    RemoteBookmark rb = new RemoteBookmark();
+    rb.protocolType = ProtocolType.SSH;
+    rb.host = "example.com";
+    rb.user = "me";
+    rb.port = 2222;
+    rb.params = "-A";
+    rb.command = "echo \"$HOME\" it's; ls";
+    assert(rb.terminalCommand.startsWith("ssh "));
+    assert(arguments(rb.terminalCommand) == "[-A][me@example.com][-p][2222][echo \"$HOME\" it's; ls]");
+
+    rb.user = "";
+    rb.port = 0;
+    rb.params = "";
+    rb.command = "";
+    assert(rb.terminalCommand == "ssh example.com");
+}
+
+// Serializing and deserializing keeps a nested tree intact
+unittest {
+    initBookmarkManager();
+    FolderBookmark root = bmMgr.root;
+    FolderBookmark folder = new FolderBookmark("Servers");
+    bmMgr.add(root, folder);
+    bmMgr.add(folder, new PathBookmark("Logs", "/var/log"));
+    RemoteBookmark rb = new RemoteBookmark();
+    rb.name = "Web";
+    rb.protocolType = ProtocolType.SSH;
+    rb.host = "web.example.com";
+    rb.user = "admin";
+    rb.port = 22;
+    rb.command = "uptime";
+    bmMgr.add(folder, rb);
+    CommandBookmark cb = new CommandBookmark();
+    cb.name = "Top";
+    cb.command = "top -d 1";
+    bmMgr.add(root, cb);
+
+    JSONValue json = root.serialize(null);
+    // Both directly and via text as when saved to and loaded from a file
+    foreach (source; [json, parseJSON(json.toString())]) {
+        FolderBookmark copy = new FolderBookmark();
+        copy.deserialize(source);
+        assert(copy.list.length == 2);
+        FolderBookmark copyFolder = cast(FolderBookmark) copy.list[0];
+        assert(copyFolder.list.length == 2);
+        RemoteBookmark copyRemote = cast(RemoteBookmark) copyFolder.list[1];
+        assert(copyRemote.host == "web.example.com" && copyRemote.port == 22 && copyRemote.command == "uptime");
+        assert(parseJSON(copy.serialize(null).toString()) == parseJSON(json.toString()));
+    }
+}
+
+// Loading and saving never loses the bookmarks file
+unittest {
+    import std.process : thisProcessID;
+
+    string dir = buildPath(tempDir(), "tilix-bm-test-" ~ to!string(thisProcessID()));
+    mkdirRecurse(dir);
+    scope(exit) rmdirRecurse(dir);
+    string file = buildPath(dir, "bookmarks.json");
+
+    string[] backups() {
+        return dirEntries(dir, "bookmarks.json.*.bak", SpanMode.shallow).map!(e => e.name).array;
+    }
+
+    // A corrupt file is backed up and left untouched
+    write(file, "{ not json");
+    initBookmarkManager();
+    bmMgr.load(file);
+    assert(backups().length == 1);
+    assert(readText(backups()[0]) == "{ not json");
+    assert(readText(file) == "{ not json");
+    std.file.remove(backups()[0]);
+
+    // With one bad entry the good one still loads and the file is backed up
+    string partial = `{"name":"Root","type":"FOLDER","list":[` ~
+        `{"name":"Good","type":"PATH","path":"/tmp"},{"name":"Bad","type":"PATH"}]}`;
+    write(file, partial);
+    initBookmarkManager();
+    bmMgr.load(file);
+    assert(bmMgr.root.list.length == 1);
+    assert(bmMgr.root.list[0].name == "Good");
+    assert(backups().length == 1);
+    assert(readText(backups()[0]) == partial);
+    std.file.remove(backups()[0]);
+
+    // Saving replaces the file and leaves no temporary file behind
+    bmMgr.save(file);
+    assert(parseJSON(readText(file))["list"].array.length == 1);
+    assert(!exists(file ~ ".tmp"));
+
+    // A good file loads without a backup
+    initBookmarkManager();
+    bmMgr.load(file);
+    assert(bmMgr.root.list.length == 1);
+    assert(backups().length == 0);
+    assert(!bmMgr.hasChanged());
+
+    // A missing file is not an error
+    initBookmarkManager();
+    bmMgr.load(buildPath(dir, "missing.json"));
+    assert(bmMgr.root.list.length == 0);
+    assert(backups().length == 0);
+}
+
+// A folder can't be moved into itself or its own sub-tree
+unittest {
+    import std.exception : assertThrown;
+
+    initBookmarkManager();
+    FolderBookmark root = bmMgr.root;
+    FolderBookmark a = new FolderBookmark("A");
+    bmMgr.add(root, a);
+    FolderBookmark b = new FolderBookmark("B");
+    bmMgr.add(a, b);
+    PathBookmark p = new PathBookmark("P", "/");
+    bmMgr.add(b, p);
+
+    assertThrown!BookmarkException(bmMgr.moveInto(a, a));
+    assertThrown!BookmarkException(bmMgr.moveInto(b, a));
+    assertThrown!BookmarkException(bmMgr.moveBefore(p, a));
+    assertThrown!BookmarkException(bmMgr.moveAfter(b, a));
+    assertThrown!BookmarkException(bmMgr.moveBefore(a, a));
+    // The tree is unchanged
+    assert(a.parent is root && b.parent is a && p.parent is b);
+
+    // Valid moves still work
+    bmMgr.moveInto(root, p);
+    assert(p.parent is root);
+    bmMgr.moveBefore(a, b);
+    assert(b.parent is root);
+    assert(root.list == [cast(Bookmark) b, a, p]);
+}

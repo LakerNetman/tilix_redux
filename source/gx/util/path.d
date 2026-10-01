@@ -83,3 +83,22 @@ unittest {
     assert(resolvePath("rel", getenv) == "rel");
 }
 
+unittest {
+    string[string] env = ["EMPTY": "", "DIR": "sub dir"];
+    string delegate(string) getenv = (string name) => (name in env) ? env[name] : null;
+    string home = environment.get("HOME");
+
+    // Tilde is expanded and the result is then absolute, so cwd isn't applied
+    assert(resolvePath("~/x", getenv, "/work") == buildPath(home, "x"));
+    assert(resolvePath("~", getenv) == home);
+    // Relative paths are joined to cwd as is, .. segments are left for the file system
+    assert(resolvePath("../a", getenv, "/work/sub") == "/work/sub/../a");
+    assert(resolvePath("$DIR/b", getenv, "/work") == "/work/sub dir/b");
+    // Without a usable cwd relative paths are left alone
+    assert(resolvePath("rel", getenv, "") == "rel");
+    assert(resolvePath("rel", getenv, "not/absolute") == "rel");
+    // An empty variable is replaced with nothing, not left as is
+    assert(resolvePath("/a$EMPTY/b", getenv) == "/a/b");
+    // An empty path stays empty, callers treat it as not set
+    assert(resolvePath("", getenv, "/work").length == 0);
+}
