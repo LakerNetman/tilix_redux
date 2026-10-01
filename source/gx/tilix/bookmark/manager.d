@@ -30,6 +30,7 @@ import gtk.Widget;
 import gx.i18n.l10n;
 
 import gx.tilix.constants;
+import gx.util.file;
 
 enum BookmarkType {
     FOLDER,
@@ -630,16 +631,12 @@ public:
 
     void save(string filename) {
         string json = root.serialize(null).toPrettyString();
-        // Write to a temporary file and rename it so a crash or full disk
-        // part way through writing never leaves a truncated bookmarks file
-        string temp = filename ~ ".tmp";
         try {
-            write(temp, json);
-            rename(temp, filename);
+            // So a crash or full disk part way through writing never leaves a truncated bookmarks file
+            writeFileAtomic(filename, json);
         } catch (Exception e) {
             error(_("Could not save bookmarks due to unexpected error"));
             error(e);
-            if (exists(temp)) tryRemove(temp);
         }
     }
 
@@ -674,14 +671,6 @@ public:
             errorf("Bookmarks file could not be fully loaded, original saved as '%s'", backupFilename);
         } catch (Exception e) {
             errorf("Could not back up bookmarks file '%s'", filename);
-            error(e);
-        }
-    }
-
-    void tryRemove(string filename) {
-        try {
-            std.file.remove(filename);
-        } catch (Exception e) {
             error(e);
         }
     }
@@ -888,7 +877,7 @@ unittest {
     // Saving replaces the file and leaves no temporary file behind
     bmMgr.save(file);
     assert(parseJSON(readText(file))["list"].array.length == 1);
-    assert(!exists(file ~ ".tmp"));
+    assert(dirEntries(dir, "*.tmp", SpanMode.shallow).empty);
 
     // A good file loads without a backup
     initBookmarkManager();
