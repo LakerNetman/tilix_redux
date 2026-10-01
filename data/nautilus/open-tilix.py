@@ -32,6 +32,24 @@ def _checkdecode(s):
     """Decode string assuming utf encoding if it's bytes, else return unmodified"""
     return s.decode('utf-8') if isinstance(s, bytes) else s
 
+def remote_terminal_command(uri, is_directory):
+    """Returns the command for tilix -e that opens an ssh session for a remote URI"""
+    result = urlparse(uri)
+    # Tilix splits the -e value into arguments like a shell would
+    if result.username:
+        value = 'ssh -t {0}'.format(
+            shlex.quote(result.username + '@' + result.hostname))
+    else:
+        value = 'ssh -t {0}'.format(shlex.quote(result.hostname))
+    if result.port:
+        value = "{0} -p {1}".format(value, result.port)
+    if is_directory:
+        # The path is quoted twice, once for Tilix splitting the
+        # arguments and once for the remote shell ssh passes them to
+        value = '{0} cd {1} ; $SHELL'.format(
+            value, shlex.quote(shlex.quote(unquote(result.path))))
+    return value
+
 def open_terminal_in_file(filename):
     if filename:
         Popen([TERMINAL, '-w', filename])
@@ -82,17 +100,7 @@ class OpenTilixExtension(GObject.GObject, Nautilus.MenuProvider):
 
     def _open_terminal(self, file_):
         if file_.get_uri_scheme() in REMOTE_URI_SCHEME:
-            result = urlparse(file_.get_uri())
-            if result.username:
-                value = 'ssh -t {0}@{1}'.format(result.username,
-                                                result.hostname)
-            else:
-                value = 'ssh -t {0}'.format(result.hostname)
-            if result.port:
-                value = "{0} -p {1}".format(value, result.port)
-            if file_.is_directory():
-                value = '{0} cd {1} ; $SHELL'.format(value, shlex.quote(result.path))
-
+            value = remote_terminal_command(file_.get_uri(), file_.is_directory())
             Popen([TERMINAL, '-e', value])
         else:
             filename = Gio.File.new_for_uri(file_.get_uri()).get_path()

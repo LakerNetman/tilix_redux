@@ -37,6 +37,9 @@
 
 module gx.tilix.terminal.regex;
 
+import std.algorithm : min;
+import std.array : appender;
+import std.ascii : isDigit;
 import std.conv;
 import std.string;
 
@@ -156,12 +159,165 @@ enum REGEX_NEWS_MAN = "(?i:news:|man:|info:)[-[:alnum:]\\Q^_{|}~!\"#$%&'()*+,./;
  * whereas $1..$x are replaced with appropriate group match
  */
  string replaceMatchTokens(string tokenizedText, string[] matches) {
-     string result = tokenizedText;
-     foreach(i, match; matches) {
-        result = result.replace("$" ~ to!string(i - 1), match);
-     }
-     return result;
+     return replaceTokens(tokenizedText, matches, null);
  }
+
+/**
+ * Replaces $x match tokens and ${variable} tokens in a single pass so that
+ * substituted text is never re-scanned for further tokens.
+ *
+ * The matches array holds the whole match first followed by all groups, including
+ * group 0, so the token $x is replaced with matches[x + 1]. The variables map is
+ * keyed by the full token, i.e. ${title}.
+ */
+string replaceTokens(string text, string[] matches, string[string] variables) {
+    auto result = appender!string();
+    size_t start = 0;
+    size_t i = 0;
+    while (i < text.length) {
+        string value;
+        size_t length = matchToken(text[i .. $], matches, variables, value);
+        if (length > 0) {
+            result.put(text[start .. i]);
+            result.put(value);
+            i += length;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    result.put(text[start .. $]);
+    return result.data;
+}
+
+/**
+ * Prefix of the environment variables used by prepareShellCommand
+ */
+enum SHELL_TOKEN_ENV_PREFIX = "TILIX_TOKEN_";
+
+/**
+ * A shell command along with the environment variables it references
+ */
+struct ShellCommand {
+    string command;
+    string[string] env;
+}
+
+/**
+ * Prepares a user defined shell command containing $x match tokens and
+ * ${variable} tokens for execution.
+ *
+ * Token values typically come from untrusted sources such as terminal output or
+ * the window title, so they are never inserted into the command text. Instead each
+ * token is replaced with a reference to an environment variable holding its value,
+ * quoted to suit the context the token appears in. The shell never re-parses the
+ * result of a variable expansion, so values cannot inject additional commands.
+ *
+ * The returned env must be passed to the process running the command.
+ */
+ShellCommand prepareShellCommand(string text, string[] matches, string[string] variables) {
+    enum Quote {NONE, SINGLE, DOUBLE}
+
+    ShellCommand result;
+    auto command = appender!string();
+    Quote quote = Quote.NONE;
+    size_t start = 0;
+    size_t i = 0;
+    while (i < text.length) {
+        char c = text[i];
+        if (quote != Quote.SINGLE && c == '\\') {
+            // Escaped character, i.e. \$1 is left as is
+            i = min(i + 2, text.length);
+            continue;
+        }
+        if (c == '\'' && quote != Quote.DOUBLE) {
+            quote = (quote == Quote.SINGLE) ? Quote.NONE : Quote.SINGLE;
+        } else if (c == '"' && quote != Quote.SINGLE) {
+            quote = (quote == Quote.DOUBLE) ? Quote.NONE : Quote.DOUBLE;
+        } else {
+            string value;
+            size_t length = matchToken(text[i .. $], matches, variables, value);
+            if (length > 0) {
+                string name = SHELL_TOKEN_ENV_PREFIX ~ to!string(result.env.length);
+                result.env[name] = value;
+                command.put(text[start .. i]);
+                final switch (quote) {
+                case Quote.NONE:
+                    command.put("\"${" ~ name ~ "}\"");
+                    break;
+                case Quote.DOUBLE:
+                    command.put("${" ~ name ~ "}");
+                    break;
+                case Quote.SINGLE:
+                    // Close the single quotes, expand the variable and re-open them
+                    command.put("'\"${" ~ name ~ "}\"'");
+                    break;
+                }
+                i += length;
+                start = i;
+                continue;
+            }
+        }
+        i++;
+    }
+    command.put(text[start .. $]);
+    result.command = command.data;
+    return result;
+}
+
+/**
+ * Checks if text starts with a $x or ${variable} token that has a value, if so
+ * the value is returned in value along with the length of the token. Returns 0
+ * if there is no matching token.
+ */
+private size_t matchToken(string text, string[] matches, string[string] variables, out string value) {
+    if (text.length < 2 || text[0] != '$') return 0;
+    if (text[1] == '{') {
+        ptrdiff_t end = text.indexOf('}');
+        if (end > 0) {
+            string* variable = text[0 .. end + 1] in variables;
+            if (variable !is null) {
+                value = *variable;
+                return end + 1;
+            }
+        }
+        return 0;
+    }
+    size_t digits = 1;
+    while (digits < text.length && isDigit(text[digits])) digits++;
+    // Use the longest group number that exists, i.e. $10 is group 10 if there is one
+    // and group 1 followed by 0 otherwise. Limit the length to avoid overflow.
+    for (size_t end = min(digits, 5); end > 1; end--) {
+        size_t index = to!size_t(text[1 .. end]) + 1;
+        if (index < matches.length) {
+            value = matches[index];
+            return end;
+        }
+    }
+    return 0;
+}
+
+unittest {
+    // matches holds the whole match followed by all groups including group 0
+    string[] matches = ["foo bar", "foo bar", "foo", "bar"];
+    string[string] variables = ["${title}": "$1 ${title}"];
+
+    assert(replaceTokens("$0|$1|$2|$3|$", matches, variables) == "foo bar|foo|bar|$3|$");
+    assert(replaceTokens("$10", matches, variables) == "foo0");
+    assert(replaceTokens("${title}${other}", matches, variables) == "$1 ${title}${other}");
+    // Substituted values are not re-scanned for tokens
+    assert(replaceTokens("$1", ["$2", "$2", "$2", "x"], null) == "$2");
+
+    string[] evil = ["x", "x", "'; rm -rf ~ #\"$(id)`id`"];
+    ShellCommand sc = prepareShellCommand("echo $1 '$1' \"$1\" \\$1 ${title}", evil, variables);
+    assert(sc.command == "echo \"${TILIX_TOKEN_0}\" ''\"${TILIX_TOKEN_1}\"'' \"${TILIX_TOKEN_2}\" \\$1 \"${TILIX_TOKEN_3}\"");
+    assert(sc.env.length == 4);
+    assert(sc.env["TILIX_TOKEN_0"] == evil[2]);
+    assert(sc.env["TILIX_TOKEN_3"] == "$1 ${title}");
+    // Quotes inside the other kind of quotes are literal
+    assert(prepareShellCommand("\"'$1'\" '\"$1\"'", evil, null).command ==
+           "\"'${TILIX_TOKEN_0}'\" '\"'\"${TILIX_TOKEN_1}\"'\"'");
+}
 
 /**
  * Struct used to track matches in terminal for cases like context menu

@@ -1304,25 +1304,34 @@ private:
      * Replace the various token variables in a string
      */
     string replaceVariables(string text) {
+        return replaceTokens(text, null, getVariables(text));
+    }
+
+    /**
+     * Returns the values of the variables, i.e. ${title}, that can be used
+     * in text keyed by the variable token.
+     */
+    string[string] getVariables(string text) {
+        string[string] variables;
         string windowTitle = vte.getWindowTitle();
         if (windowTitle.length == 0)
             windowTitle = _("Terminal");
-        text = text.replace(VARIABLE_TERMINAL_TITLE, windowTitle);
-        text = text.replace(VARIABLE_TERMINAL_ICON_TITLE, vte.getIconTitle());
-        text = text.replace(VARIABLE_TERMINAL_ID, to!string(terminalID));
-        text = text.replace(VARIABLE_TERMINAL_COLUMNS, to!string(vte.getColumnCount()));
-        text = text.replace(VARIABLE_TERMINAL_ROWS, to!string(vte.getRowCount()));
-        text = text.replace(VARIABLE_TERMINAL_HOSTNAME, gst.currentHostname);
-        text = text.replace(VARIABLE_TERMINAL_USERNAME, gst.currentUsername);
-        text = text.replace(VARIABLE_TERMINAL_STATUS_READONLY, to!string(!vte.getInputEnabled()));
-        text = text.replace(VARIABLE_TERMINAL_STATUS_SILENCE, to!string(monitorSilence));
-        text = text.replace(VARIABLE_TERMINAL_STATUS_INPUT_SYNC, to!string(isSynchronizedInput()));
+        variables[VARIABLE_TERMINAL_TITLE] = windowTitle;
+        variables[VARIABLE_TERMINAL_ICON_TITLE] = vte.getIconTitle();
+        variables[VARIABLE_TERMINAL_ID] = to!string(terminalID);
+        variables[VARIABLE_TERMINAL_COLUMNS] = to!string(vte.getColumnCount());
+        variables[VARIABLE_TERMINAL_ROWS] = to!string(vte.getRowCount());
+        variables[VARIABLE_TERMINAL_HOSTNAME] = gst.currentHostname;
+        variables[VARIABLE_TERMINAL_USERNAME] = gst.currentUsername;
+        variables[VARIABLE_TERMINAL_STATUS_READONLY] = to!string(!vte.getInputEnabled());
+        variables[VARIABLE_TERMINAL_STATUS_SILENCE] = to!string(monitorSilence);
+        variables[VARIABLE_TERMINAL_STATUS_INPUT_SYNC] = to!string(isSynchronizedInput());
 
         if (text.indexOf(VARIABLE_TERMINAL_PROCESS) >= 0) {
             if (tilix.processMonitor)
-                text = text.replace(VARIABLE_TERMINAL_PROCESS, activeProcessName);
+                variables[VARIABLE_TERMINAL_PROCESS] = activeProcessName;
             else
-                text = text.replace(VARIABLE_TERMINAL_PROCESS, _("Not Enabled"));
+                variables[VARIABLE_TERMINAL_PROCESS] = _("Not Enabled");
         }
         string path;
         if (terminalInitialized) {
@@ -1331,8 +1340,8 @@ private:
             //trace("Terminal not initialized yet or VTE not configured, no path available");
             path = "";
         }
-        text = text.replace(VARIABLE_TERMINAL_DIR, path);
-        return text;
+        variables[VARIABLE_TERMINAL_DIR] = path;
+        return variables;
     }
 
     /**
@@ -1670,9 +1679,14 @@ private:
      */
     void processTrigger(TerminalTrigger trigger, string[] groups) {
 
-        string[string] getParameters(string triggerParameters) {
+        // replace various variable tokens in parameters, i.e. ${rows}, ${title}, etc
+        // along with the $x match tokens
+        string[string] variables = getVariables(trigger.parameters);
+        string parameters = replaceTokens(trigger.parameters, groups, variables);
+
+        string[string] getParameters() {
             string[string] result;
-            foreach (parameter; split(replaceMatchTokens(triggerParameters, groups), ";")) {
+            foreach (parameter; split(parameters, ";")) {
                 string[] pair = split(parameter, "=");
                 if (pair.length == 2) {
                     result[pair[0].strip()] = pair[1].strip();
@@ -1681,16 +1695,13 @@ private:
             return result;
         }
 
-        // replace various variable tokens in parameters, i.e. ${rows}, ${title}, etc
-        trigger.parameters = replaceVariables(trigger.parameters);
-
         final switch (trigger.action) {
             case TriggerAction.UPDATE_STATE:
-                string[string] parameters = getParameters(trigger.parameters);
+                string[string] state = getParameters();
                 bool update = false;
                 foreach (variable; EnumMembers!(GlobalTerminalState.StateVariable)) {
-                    if (variable in parameters) {
-                        gst.updateState(variable, parameters[variable]);
+                    if (variable in state) {
+                        gst.updateState(variable, state[variable]);
                         //tracef("Updating state %s=%s", variable, parameters[variable]);
                         update = true;
                     }
@@ -1701,26 +1712,28 @@ private:
                 }
                 break;
             case TriggerAction.EXECUTE_COMMAND:
-                spawnShell(replaceMatchTokens(trigger.parameters, groups));
+                // Match tokens contain terminal output which is untrusted
+                ShellCommand sc = prepareShellCommand(trigger.parameters, groups, variables);
+                spawnShell(sc.command, sc.env);
                 break;
             case TriggerAction.SEND_NOTIFICATION:
-                string[string] parameters = getParameters(trigger.parameters);
-                tracef("Parameters count: %d", parameters.length);
+                string[string] notification = getParameters();
+                tracef("Parameters count: %d", notification.length);
                 string title = _("Tilix Custom Notification");
                 string _body;
-                if ("title" in parameters) title = parameters["title"];
-                if ("body" in parameters) _body = parameters["body"];
-                else _body = replaceMatchTokens(trigger.parameters, groups);
+                if ("title" in notification) title = notification["title"];
+                if ("body" in notification) _body = notification["body"];
+                else _body = parameters;
                 if (!hasFocus()) {
                     notifyProcessNotification(title, _body, uuid);
                 }
                 break;
             case TriggerAction.UPDATE_BADGE:
-                _overrideBadge = replaceMatchTokens(trigger.parameters, groups);
+                _overrideBadge = parameters;
                 updateBadge();
                 break;
             case TriggerAction.UPDATE_TITLE:
-                _overrideTitle = replaceMatchTokens(trigger.parameters, groups);
+                _overrideTitle = parameters;
                 updateTitle();
                 break;
             case TriggerAction.PLAY_BELL:
@@ -1729,8 +1742,7 @@ private:
                 }
                 break;
             case TriggerAction.SEND_TEXT:
-                string value = replaceMatchTokens(trigger.parameters, groups);
-                vte.feedChild(value);
+                vte.feedChild(parameters);
                 break;
             case TriggerAction.INSERT_PASSWORD:
                 trace("Processing insert password trigger");
@@ -1740,8 +1752,8 @@ private:
                 }
                 break;
             case TriggerAction.RUN_PROCESS:
-                string process = replaceMatchTokens(trigger.parameters, groups);
-                auto response = executeShell(process);
+                ShellCommand sc = prepareShellCommand(trigger.parameters, groups, variables);
+                auto response = executeShell(sc.command, sc.env);
                 vte.feedChild(response.output);
                 break;
         }
@@ -2048,11 +2060,10 @@ private:
                             string[] groups = [info.getString()];
                             groups ~= info.fetchAll();
                             foreach(group; groups) tracef("Group %s", group);
-                            string command = replaceMatchTokens(tr.command, groups);
-                            command = replaceVariables(command);
-                            trace("Command: " ~ command);
-                            string[string] env;
-                            spawnShell(command, env, Config.none, currentLocalDirectory);
+                            // The link text and variables such as the title are untrusted
+                            ShellCommand sc = prepareShellCommand(tr.command, groups, getVariables(tr.command));
+                            trace("Command: " ~ sc.command);
+                            spawnShell(sc.command, sc.env, Config.none, currentLocalDirectory);
                         }
                     }
                 } catch (GException ge) {

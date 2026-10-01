@@ -17,6 +17,7 @@ import gdk.Pixbuf;
 import gdk.RGBA;
 import gdk.Screen;
 
+import glib.ShellUtils;
 import glib.Util;
 
 import gtk.IconInfo;
@@ -290,7 +291,7 @@ public:
     }
 
     @property string terminalCommand() {
-        return "cd " ~ _path.replace(" ", "\\ ");
+        return "cd " ~ ShellUtils.shellQuote(_path);
     }
 }
 
@@ -430,7 +431,7 @@ public:
                 if (user.length > 0) result ~= " " ~ user ~ "@" ~ host;
                 else result ~= " " ~ host;
                 if (port > 0) result ~= " -p " ~ to!string(port);
-                if (command.length > 0) result ~= " \"" ~ command ~ "\"";
+                if (command.length > 0) result ~= " " ~ ShellUtils.shellQuote(command);
                 break;
             case ProtocolType.TELNET:
                 result = "telnet";
