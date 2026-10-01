@@ -139,6 +139,15 @@ void threadsAddIdleDelegate(T, parameterTuple...)(T theDelegate, parameterTuple 
 }
 
 /**
+ * Destroy notify that removes the garbage collector root added for a DelegatePointer
+ * once GLib no longer references it.
+ */
+private extern(C) nothrow void removeDelegatePointerRoot(void* data)
+{
+	GC.removeRoot(data);
+}
+
+/**
  * Convenience method that allows scheduling a delegate to be executed with gdk.Threads.threadsAddTimeout instead of a
  * traditional callback with C linkage.
  *
@@ -172,11 +181,8 @@ uint threadsAddTimeoutDelegate(T, parameterTuple...)(uint interval, T theDelegat
 			// Catch exceptions here as otherwise, memory may never be freed below.
 		}
 
-		if (!callAgainNextIdleCycle) {
-			//trace("Removing delegate pointer");
-			GC.removeRoot(delegatePointer);
-			return false;
-		} else return true;
+		// The root is removed by removeDelegatePointerRoot when the source is destroyed
+		return callAgainNextIdleCycle;
 	};
 
 	delegatePointer = cast(void*) new DelegatePointer!(T, parameterTuple)(wrapperDelegate, parameters);
@@ -185,9 +191,15 @@ uint threadsAddTimeoutDelegate(T, parameterTuple...)(uint interval, T theDelegat
 	// isn't used anymore and collects it.
 	GC.addRoot(delegatePointer);
 
-	return gdk.Threads.threadsAddTimeout(
+	// Use a destroy notify to remove the root rather than doing it when the delegate
+	// returns false, otherwise the delegate leaks if the timeout is removed with
+	// g_source_remove before it fires.
+	enum G_PRIORITY_DEFAULT = 0;
+	return gdk.Threads.threadsAddTimeoutFull(
+		G_PRIORITY_DEFAULT,
 		interval,
 		cast(GSourceFunc) &invokeDelegatePointerFunc!(DelegatePointer!(T, parameterTuple), int),
-		delegatePointer
+		delegatePointer,
+		cast(GDestroyNotify) &removeDelegatePointerRoot
 		);
 }

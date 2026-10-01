@@ -1489,7 +1489,13 @@ private:
 		addRecentSessionFile(filename);
         tracef("Session dimensions: w=%d, h=%d", width, height);
         Session session = new Session("");
-        session.initSession(value, filename, width, height, nb.getNPages() == 0);
+        try {
+            session.initSession(value, filename, width, height, nb.getNPages() == 0);
+        } catch (SessionCreationException e) {
+            // The session was never added to the window, destroy it rather than leak it
+            session.destroy();
+            throw e;
+        }
         addSession(session);
     }
 
@@ -1780,8 +1786,12 @@ public:
                 }
 
                 trace("Focus lost, waiting to hide quake window");
-                // store a reference to this timeout so that it may be canceled if we regain focus
+                // store a reference to this timeout so that it may be canceled if we regain focus,
+                // cancel any existing one first as it could no longer be canceled once replaced
+                removeTimeout();
                 timeoutID = threadsAddTimeoutDelegate(gsSettings.getInt(SETTINGS_QUAKE_HIDE_LOSE_FOCUS_DELAY_KEY), delegate() {
+                    // The source is removed once this returns false, don't remove it again
+                    timeoutID = 0;
                     trace("Focus lost and timeout reached, hiding quake window");
                     if (isVisible()) {
                         this.hide();

@@ -1123,6 +1123,12 @@ public:
         }
         catch (Exception e) {
             error("Session could not be created due to error", e);
+            // Terminals created before the error already started their shells and may
+            // not be attached to the session widget yet, destroy them so they don't linger
+            foreach(terminal; terminals.dup) {
+                removeTerminalReferences(terminal);
+                terminal.destroy();
+            }
             throw new SessionCreationException("Session could not be created due to error: " ~ e.msg, e);
         }
     }

@@ -2966,29 +2966,40 @@ private:
       HostCommandExitedCallback callback;
       int pid = -1;
       uint signalId = 0u;
-      int status = -1;
+      // Connection the signal is subscribed on, holds a reference released by finishHostCommand
+      GDBusConnection* connection;
+      // Commands that exited before the HostCommand reply told us our pid
+      int[uint] earlyExits;
     };
+
+    /**
+     * Stops listening for the exit of a host command and releases the
+     * resources held for it. The args must not be used after calling this.
+     */
+    static void finishHostCommand(HostCommandExitedArgs* args) {
+        import gtkc.gio: g_dbus_connection_signal_unsubscribe;
+        import gtkc.gobject: g_object_unref;
+
+        g_dbus_connection_signal_unsubscribe(args.connection, args.signalId);
+        g_object_unref(cast(void*) args.connection);
+        args.connection = null;
+        GC.removeRoot(cast(void*)args);
+    }
 
     extern(C) static void hostCommandExitedCallback(GDBusConnection *connection, const(char)* senderName, const(char)* objectPath, const(char)* interfaceName,
                                                     const(char)* signalName, gtkc.glibtypes.GVariant* parameters, HostCommandExitedArgs *args) {
         uint pid, status;
         g_variant_get(parameters, "(uu)", &pid, &status);
 
-        if (args.pid == -1 || pid == args.pid) {
-            import gtkc.gio: g_dbus_connection_signal_unsubscribe;
-
-            if (args.pid == -1) {
-                trace("hostCommandExitedCallback was called before spawn completed.");
-                args.pid = pid;
-                args.status = status;
-            } else {
-                g_dbus_connection_signal_unsubscribe(connection, args.signalId);
-                args.callback(status);
-            }
-
-            GC.removeRoot(cast(void*)args);
-            warning("**********COLLECT**********");
-            GC.collect();
+        if (args.pid == -1) {
+            // The signal is received for every host command, we don't know our pid yet
+            // so remember the status in case it is ours, sendHostCommand checks it
+            trace("hostCommandExitedCallback was called before spawn completed.");
+            args.earlyExits[pid] = status;
+        } else if (pid == args.pid) {
+            HostCommandExitedCallback callback = args.callback;
+            finishHostCommand(args);
+            callback(status);
         }
     }
 
@@ -3014,10 +3025,12 @@ private:
             null
         );
         connection.setExitOnClose(false);
+        // Keep the connection alive until the command exits, released by finishHostCommand
         connection.doref();
 
         auto callbackArgs = new HostCommandExitedArgs();
         callbackArgs.callback = exitedCallback;
+        callbackArgs.connection = connection.getDBusConnectionStruct();
         GC.addRoot(cast(void*)callbackArgs);
 
         uint signalId = connection.signalSubscribe(
@@ -3046,22 +3059,26 @@ private:
             null
         );
 
+        callbackArgs.signalId = signalId;
+
         if (reply is null) {
             warning("No reply from flatpak dbus service");
-            connection.signalUnsubscribe(signalId);
+            finishHostCommand(callbackArgs);
             return false;
         } else {
             uint pid;
             g_variant_get(reply.getVariantStruct(), "(u)", &pid);
             gpid = pid;
 
-            if (callbackArgs.pid != -1) {
+            int* status = pid in callbackArgs.earlyExits;
+            if (status !is null) {
                 trace("HostCommandExited was already emitted");
-                connection.signalUnsubscribe(signalId);
-                exitedCallback(callbackArgs.status);
+                int exitStatus = *status;
+                finishHostCommand(callbackArgs);
+                exitedCallback(exitStatus);
             } else {
+                callbackArgs.earlyExits = null;
                 callbackArgs.pid = pid;
-                callbackArgs.signalId = signalId;
             }
 
             return true;
@@ -3084,7 +3101,7 @@ private:
         string[] args = [format("%s/bin/tilix-flatpak-toolbox", hostRoot), command, arg];
 
         Pipe output = pipe();
-        scope(exit) pipe.close();
+        scope(exit) output.close();
 
         int gpid, status = -1;
 
@@ -3094,7 +3111,11 @@ private:
 
         int[] stdio_fds = [0, output.writeEnd.fileno, 2] ~ extra_fds;
 
-        if (!sendHostCommand("/", args, [], stdio_fds, gpid, &commandExited)) {
+        bool sent = sendHostCommand("/", args, [], stdio_fds, gpid, &commandExited);
+        // The host process has its own copy of the write end now, close ours
+        // otherwise reading the output never sees end of file and can block forever
+        output.writeEnd.close();
+        if (!sent) {
             return null;
         }
 
