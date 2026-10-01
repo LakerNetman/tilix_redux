@@ -265,10 +265,10 @@ private:
         //Action Column
         CellRendererCombo crtAction = new CellRendererCombo();
         ListStore lsActions = new ListStore([GType.STRING]);
+        localizedActions = localizedTriggerActions();
         foreach(value; SETTINGS_PROFILE_TRIGGER_ACTION_VALUES) {
             TreeIter iter = lsActions.createIter();
             lsActions.setValue(iter, 0, _(value));
-            localizedActions[_(value)] = value;
         }
         import gtkc.gobject: g_object_set;
         import glib.Str: Str;
@@ -283,6 +283,7 @@ private:
             if (iter !is null) {
                 ls.setValue(iter, COLUMN_ACTION, action);
             }
+            updateUI();
         });
         column = new TreeViewColumn(_("Action"), crtAction, "text", COLUMN_ACTION);
         column.setMinWidth(150);
@@ -314,6 +315,7 @@ private:
         btnAdd.addOnClicked(delegate(Button) {
             ls.createIter();
             selectRow(tv, ls.iterNChildren(null) - 1, null);
+            updateUI();
         });
         buttons.add(btnAdd);
         btnDelete = new Button(_("Delete"));
@@ -354,7 +356,15 @@ private:
 
     void updateUI() {
         btnDelete.setSensitive(tv.getSelectedIter() !is null);
-        setResponseSensitive(GtkResponseType.APPLY, validateRegex(ls, COLUMN_REGEX, lblErrors));
+        setResponseSensitive(GtkResponseType.APPLY, validateRegex(ls, COLUMN_REGEX, lblErrors, &validateAction));
+    }
+
+    /**
+     * Returns an error if the row has no action or one that isn't recognized,
+     * i.e. a new row where no action was selected yet.
+     */
+    string validateAction(TreeIter iter) {
+        return validateTriggerAction(localizedActions, ls.getValueString(iter, COLUMN_ACTION));
     }
 
 public:
@@ -369,8 +379,11 @@ public:
         foreach (TreeIter iter; TreeIterRange(ls)) {
             string regex = ls.getValueString(iter, COLUMN_REGEX);
             if (regex.length == 0) continue;
+            string action = triggerActionValue(localizedActions, ls.getValueString(iter, COLUMN_ACTION));
+            // Apply is disabled while any action is invalid but skip the row rather than crash
+            if (action is null) continue;
             results ~= escapeCSV(regex) ~ ',' ~
-                       escapeCSV(localizedActions[ls.getValueString(iter, COLUMN_ACTION)]) ~ ',' ~
+                       escapeCSV(action) ~ ',' ~
                        escapeCSV(ls.getValueString(iter, COLUMN_PARAMETERS));
         }
         return results;
@@ -389,7 +402,11 @@ Label createErrorLabel() {
     return lblErrors;
 }
 
-bool validateRegex(ListStore ls, int regexColumn, Label lblErrors) {
+/**
+ * Validates the regex in each row, if validateRow is provided it is also called for
+ * each row with a regex and returns an error message or null if the row is valid.
+ */
+bool validateRegex(ListStore ls, int regexColumn, Label lblErrors, string delegate(TreeIter) validateRow = null) {
     bool valid = true;
     string errors;
     int index = 0;
@@ -399,6 +416,12 @@ bool validateRegex(ListStore ls, int regexColumn, Label lblErrors) {
             string regex = ls.getValueString(iter, regexColumn);
             if (regex.length > 0) {
                 GRegex check = new GRegex(regex, GRegexCompileFlags.OPTIMIZE, cast(GRegexMatchFlags) 0);
+                string rowError = (validateRow is null) ? null : validateRow(iter);
+                if (rowError.length > 0) {
+                    if (errors.length > 0) errors ~= "\n";
+                    errors ~= format(_("Row %d: "), index) ~ rowError;
+                    valid = false;
+                }
             }
         } catch (GException ge) {
             if (errors.length > 0) errors ~= "\n";
@@ -414,3 +437,31 @@ bool validateRegex(ListStore ls, int regexColumn, Label lblErrors) {
     }
     return valid;
 }
+/**
+ * Returns the trigger actions keyed by their localized name as shown in the dialog
+ */
+string[string] localizedTriggerActions() {
+    string[string] result;
+    foreach(value; SETTINGS_PROFILE_TRIGGER_ACTION_VALUES) {
+        result[_(value)] = value;
+    }
+    return result;
+}
+
+/**
+ * Returns the settings value for a localized trigger action or null if the action
+ * is empty or unknown, i.e. a new row where no action was selected yet.
+ */
+string triggerActionValue(string[string] localizedActions, string localized) {
+    string* value = localized in localizedActions;
+    return (value is null) ? null : *value;
+}
+
+/**
+ * Returns an error message if the localized trigger action is not valid or null if it is
+ */
+string validateTriggerAction(string[string] localizedActions, string localized) {
+    if (triggerActionValue(localizedActions, localized) !is null) return null;
+    return _("An action must be selected");
+}
+

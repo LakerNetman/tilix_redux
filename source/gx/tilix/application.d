@@ -714,7 +714,7 @@ public:
                 tracef("Setting app id to %s", id);
                 setApplicationId(id);
             } else {
-                warningf(_("The application ID %s is not valid"));
+                warningf(_("The application ID %s is not valid"), id);
             }
         }
 

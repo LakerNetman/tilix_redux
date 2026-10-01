@@ -190,7 +190,10 @@ private:
                 scope(exit) {pd.destroy();}
                 pd.showAll();
                 if (pd.run() == ResponseType.OK) {
+                    // The collection is null while it is being reloaded
+                    if (collection is null) return;
                     ListG list = collection.getItems();
+                    if (list is null) return;
                     Item[] items = list.toArray!Item;
                     foreach (item; items) {
                         if (item.getSchemaName() == SCHEMA_NAME) {
@@ -276,8 +279,9 @@ private:
 
     // Reload entries from collections
     void reload() {
-        // Have to disconnect otherwise you just get back cached entries
-        service.disconnect();
+        // Have to disconnect otherwise you just get back cached entries.
+        // Service is null if a reload is already in progress
+        if (service !is null) service.disconnect();
         service = null;
         collection = null;
         createService();
@@ -395,6 +399,8 @@ public:
             immutable(char*) idz = toStringz(id);
             ht.insert(cast(void*)attrID, cast(void*)idz);
             string password = Secret.passwordLookupvSync(schema, ht, null);
+            // The entry may have been deleted outside of Tilix, don't send a lone return
+            if (password.length == 0) return null;
             if (gsSettings.getBoolean(SETTINGS_PASSWORD_INCLUDE_RETURN_KEY)) {
                 password ~= '\n';
             }

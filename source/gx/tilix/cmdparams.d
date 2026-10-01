@@ -56,6 +56,57 @@ struct Geometry {
     GeometryFlag flag;
 }
 
+private enum GEOMETRY_PATTERN_FULL = "(?P<width>\\d+)x(?P<height>\\d+)(?P<x>[-+]\\d+)(?P<y>[-+]\\d+)";
+private enum GEOMETRY_PATTERN_DIMENSIONS = "(?P<width>\\d+)x(?P<height>\\d+)";
+
+/**
+ * Parses an X11 style geometry string, i.e. 800x600+10-20 or 800x600.
+ * Returns a Geometry with the flag NONE if the string is invalid.
+ */
+Geometry parseGeometryString(string value) {
+    Geometry geometry;
+    try {
+        auto m = matchFirst(value, regex(GEOMETRY_PATTERN_FULL));
+        if (m) {
+            geometry.width = to!uint(m["width"]);
+            geometry.height = to!uint(m["height"]);
+            geometry.x = to!int(m["x"]);
+            geometry.xNegative = m["x"].startsWith("-");
+            geometry.y = to!int(m["y"]);
+            geometry.yNegative = m["y"].startsWith("-");
+            geometry.flag = GeometryFlag.FULL;
+            return geometry;
+        }
+        m = matchFirst(value, regex(GEOMETRY_PATTERN_DIMENSIONS));
+        if (m) {
+            geometry.width = to!uint(m["width"]);
+            geometry.height = to!uint(m["height"]);
+            geometry.flag = GeometryFlag.PARTIAL;
+            return geometry;
+        }
+    } catch (ConvException e) {
+        // i.e. a width or position too large for an int
+    }
+    errorf(_("Geometry string '%s' is invalid and could not be parsed"), value);
+    return Geometry();
+}
+
+/**
+ * Returns the group from -g NAME, --group NAME or --group=NAME in the
+ * arguments, the last one wins, or null if there is none.
+ */
+string findGroupArg(string[] args) {
+    string group;
+    foreach (i, arg; args) {
+        if (arg == "-g" || arg == "--group") {
+            if (i + 1 < args.length) group = args[i + 1];
+        } else if (arg.startsWith("--group=")) {
+            group = arg["--group=".length .. $];
+        }
+    }
+    return group;
+}
+
 /**
  * Manages the command line options
  */
@@ -88,9 +139,6 @@ private:
 
     bool _exit = false;
     int _exitCode = 0;
-
-    enum GEOMETRY_PATTERN_FULL = "(?P<width>\\d+)x(?P<height>\\d+)(?P<x>[-+]\\d+)(?P<y>[-+]\\d+)";
-    enum GEOMETRY_PATTERN_DIMENSIONS = "(?P<width>\\d+)x(?P<height>\\d+)";
 
     string[] getValues(VariantDict vd, string key) {
         GVariant value = vd.lookupValue(key, new GVariantType("as"));
@@ -129,30 +177,7 @@ private:
 
     void parseGeometry(string value) {
         trace("Parsing geometry string " ~ value);
-        auto r = regex(GEOMETRY_PATTERN_FULL);
-        auto m = matchFirst(value, r);
-        if (m) {
-            _geometry.width = to!uint(m["width"]);
-            _geometry.height = to!uint(m["height"]);
-            _geometry.x = to!int(m["x"]);
-            _geometry.xNegative = m["x"].startsWith("-");
-            _geometry.y = to!int(m["y"]);
-            _geometry.yNegative = m["y"].startsWith("-");
-            _geometry.flag = GeometryFlag.FULL;
-            return;
-        } else {
-            r = regex(GEOMETRY_PATTERN_DIMENSIONS);
-            m = matchFirst(value, r);
-            if (m) {
-                _geometry.width = to!int(m["width"]);
-                _geometry.height = to!int(m["height"]);
-                _geometry.flag = GeometryFlag.PARTIAL;
-                return;
-            } else {
-                errorf(_("Geometry string '%s' is invalid and could not be parsed"), value);
-            }
-        }
-        _geometry.flag = GeometryFlag.NONE;
+        _geometry = parseGeometryString(value);
     }
 
 public:

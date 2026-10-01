@@ -116,15 +116,12 @@ int main(string[] args) {
             FileUtils.chdir(cwd);
         } else if (arg == "--new-process") {
             newProcess = true;
-        } else if (arg == "-g") {
-            group = args[i+1];
-        } else if (arg.startsWith("--group")) {
-            group = arg[8..$];
         } else if (arg == "-v" || arg == "--version") {
             outputVersions();
             return 0;
         }
     }
+    group = findGroupArg(args);
     //append TILIX_ID to args if present
     try {
         string terminalUUID = environment["TILIX_ID"];

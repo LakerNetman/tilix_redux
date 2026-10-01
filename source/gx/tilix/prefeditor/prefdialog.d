@@ -233,7 +233,8 @@ private:
         string layout = layoutValue.getString();
 
         string[] parts = split(layout, ":");
-        string part1 = parts[0] ~ ":";
+        // An empty layout, i.e. no window buttons, splits into no parts
+        string part1 = (parts.length > 0 ? parts[0] : "") ~ ":";
         string part2;
 
         if (parts.length >= 2)

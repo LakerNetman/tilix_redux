@@ -1470,10 +1470,7 @@ private:
      * Loads session from a file
      */
     void loadSession(string filename) {
-        if (!exists(filename))
-            throw new SessionCreationException(format(_("Filename '%s' does not exist"), filename));
-        string text = readText(filename);
-        JSONValue value = parseJSON(text);
+        JSONValue value = Session.readSessionFile(filename);
         int width = nb.getAllocatedWidth();
         int height = nb.getAllocatedHeight();
         // If no sessions then we are loading our first session,

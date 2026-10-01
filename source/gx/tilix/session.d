@@ -9,6 +9,7 @@ import core.stdc.locale;
 import std.algorithm;
 import std.conv;
 import std.experimental.logger;
+import std.file : exists, readText;
 import std.format;
 import std.json;
 import std.string;
@@ -1182,6 +1183,30 @@ public:
         root[NODE_TYPE] = WidgetType.SESSION;
         setlocale(LC_ALL, null);
         return root;
+    }
+
+    /**
+     * Reads and parses a session file, checking it has the basic structure of a
+     * session so a malformed file fails before any terminals are created.
+     *
+     * Throws: SessionCreationException for any error, i.e. a missing file, a
+     * directory, a non UTF-8 file or invalid JSON. Callers only expect this
+     * exception, anything else would abort the application.
+     */
+    static JSONValue readSessionFile(string filename) {
+        if (!exists(filename))
+            throw new SessionCreationException(format(_("Filename '%s' does not exist"), filename));
+        JSONValue value;
+        try {
+            value = parseJSON(readText(filename));
+        } catch (Exception e) {
+            throw new SessionCreationException(format(_("Session file '%s' could not be read: %s"), filename, e.msg), e);
+        }
+        if (value.type != JSONType.object || NODE_CHILD !in value || value[NODE_CHILD].type != JSONType.object ||
+                NODE_NAME !in value || value[NODE_NAME].type != JSONType.string) {
+            throw new SessionCreationException(format(_("Session file '%s' is not a valid session"), filename));
+        }
+        return value;
     }
 
     static void getPersistedSessionSize(JSONValue value, out int width, out int height) {

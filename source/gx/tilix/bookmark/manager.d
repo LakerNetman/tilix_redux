@@ -559,7 +559,7 @@ public:
 
     void remove(Bookmark bm) {
         if (bm is null || bm.parent is null) {
-            error("Unexpected error, bookmark %s is nuill or bookmark has no parent", bm.name);
+            errorf("Unexpected error, bookmark %s is null or bookmark has no parent", bm is null ? "(null)" : bm.name);
             return;
         }
         tracef("Removing %s from folder %s", bm.name, bm.parent.name);
