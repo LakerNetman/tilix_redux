@@ -757,7 +757,7 @@ private:
 
         if (useTabs) {
             SessionTabLabel label = cast(SessionTabLabel) nb.getTabLabel(page);
-            label.onCloseClicked.connect(&closeSession);
+            label.onCloseClicked.connect(&onTabCloseClicked);
             nb.setTabReorderable(session, true);
             nb.setTabDetachable(session, true);
         }
@@ -818,6 +818,14 @@ private:
     /**
      * Used to handle cases where the user requests a session be closed
      */
+    /**
+     * The close button on a tab. Goes through the same checks as closing the session
+     * from the menu or sidebar, which ask first if processes are running.
+     */
+    void onTabCloseClicked(Session session) {
+        onUserSessionClose(session.uuid, new CumulativeResult!bool());
+    }
+
     void onUserSessionClose(string sessionUUID, CumulativeResult!bool result) {
         if (_noPrompt) {
             result.addResult(false);
@@ -849,7 +857,7 @@ private:
         if (useTabs) {
             SessionTabLabel label = cast(SessionTabLabel) nb.getTabLabel(session);
             if (label !is null) {
-                label.onCloseClicked.disconnect(&closeSession);
+                label.onCloseClicked.disconnect(&onTabCloseClicked);
                 label.clear();
             }
         }
@@ -986,7 +994,7 @@ private:
         trace("Detaching tab, create new window");
         SessionTabLabel label = cast(SessionTabLabel) nb.getTabLabel(page);
         if (label !is null) {
-            label.onCloseClicked.disconnect(&closeSession);
+            label.onCloseClicked.disconnect(&onTabCloseClicked);
         }
         AppWindow window = cloneWindow();
         window.move(x, y);
