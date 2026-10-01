@@ -7,8 +7,10 @@ module gx.tilix.bookmark.manager;
 import std.algorithm;
 import std.array;
 import std.conv;
+import std.datetime.systime : Clock;
 import std.experimental.logger;
 import std.file;
+import std.format : format;
 import std.json;
 import std.path;
 import std.uuid;
@@ -233,6 +235,8 @@ public:
             } catch (Exception e) {
                 error(_("Error deserializing bookmark"));
                 error(e);
+                // The bookmark will be missing when the file is next saved
+                bmMgr._loadErrors = true;
             }
         }
     }
@@ -415,7 +419,9 @@ public:
     override void deserialize(JSONValue value) {
         super.deserialize(value);
         _host = value[NODE_HOST].str;
-        _port = to!uint(value[NODE_PORT].integer);
+        // Serialized as unsigned, but parsing JSON text gives a signed integer
+        JSONValue port = value[NODE_PORT];
+        _port = to!uint(port.type == JSONType.uinteger ? port.uinteger : port.integer);
         _user = value[NODE_USER].str;
         _params = value[NODE_PARAMS].str;
         _protocolType = to!ProtocolType(value[NODE_PROTOCOL_TYPE].str);
@@ -518,6 +524,8 @@ private:
     Bookmark[string] bookmarks;
 
     bool _changed = false;
+    // Set when some or all bookmarks in the file could not be loaded
+    bool _loadErrors = false;
 
     /**
      * Remove all references to folder and it's children
@@ -569,18 +577,35 @@ public:
     }
 
     void moveBefore(Bookmark target, Bookmark source) {
+        checkMove(target, source);
         source.parent.remove(source);
         target.parent.insertBefore(target, source);
     }
 
     void moveAfter(Bookmark target, Bookmark source) {
+        checkMove(target, source);
         source.parent.remove(source);
         target.parent.insertAfter(target, source);
     }
 
     void moveInto(FolderBookmark target, Bookmark source) {
+        checkMove(target, source);
         source.parent.remove(source);
         target.add(source);
+    }
+
+    /**
+     * Throws a BookmarkException if moving source next to or into target
+     * would place source inside itself, i.e. a folder into its own sub-tree.
+     * That would detach the folder from the root, losing it when saved, or
+     * make it contain itself and recurse forever when serialized.
+     */
+    void checkMove(Bookmark target, Bookmark source) {
+        for (Bookmark current = target; current !is null; current = current.parent) {
+            if (current is source) {
+                throw new BookmarkException(format("Bookmark '%s' cannot be moved into itself", source.name));
+            }
+        }
     }
 
     string localize(BookmarkType type) {
@@ -600,13 +625,30 @@ public:
         if (!exists(path)) {
             mkdirRecurse(path);
         }
-        string filename = buildPath(path, BOOKMARK_FILE);
+        save(buildPath(path, BOOKMARK_FILE));
+    }
+
+    void save(string filename) {
         string json = root.serialize(null).toPrettyString();
-        write(filename, json);
+        // Write to a temporary file and rename it so a crash or full disk
+        // part way through writing never leaves a truncated bookmarks file
+        string temp = filename ~ ".tmp";
+        try {
+            write(temp, json);
+            rename(temp, filename);
+        } catch (Exception e) {
+            error(_("Could not save bookmarks due to unexpected error"));
+            error(e);
+            if (exists(temp)) tryRemove(temp);
+        }
     }
 
     void load() {
-        string filename = buildPath(Util.getUserConfigDir(), APPLICATION_CONFIG_FOLDER, BOOKMARK_FILE);
+        load(buildPath(Util.getUserConfigDir(), APPLICATION_CONFIG_FOLDER, BOOKMARK_FILE));
+    }
+
+    void load(string filename) {
+        _loadErrors = false;
         if (exists(filename)) {
             try {
                 string json = readText(filename);
@@ -615,10 +657,33 @@ public:
             } catch (Exception e) {
                 error(_("Could not load bookmarks due to unexpected error"));
                 error(e);
-                //TODO: Copy bad file
+                _loadErrors = true;
             }
+            // The next save would overwrite the bookmarks that could not be
+            // loaded, keep a copy of the original file so they can be recovered
+            if (_loadErrors) backup(filename);
         }
         _changed = false;
+    }
+
+    void backup(string filename) {
+        string timestamp = Clock.currTime().toISOString().split(".")[0];
+        string backupFilename = filename ~ "." ~ timestamp ~ ".bak";
+        try {
+            std.file.copy(filename, backupFilename);
+            errorf("Bookmarks file could not be fully loaded, original saved as '%s'", backupFilename);
+        } catch (Exception e) {
+            errorf("Could not back up bookmarks file '%s'", filename);
+            error(e);
+        }
+    }
+
+    void tryRemove(string filename) {
+        try {
+            std.file.remove(filename);
+        } catch (Exception e) {
+            error(e);
+        }
     }
 
     void changed() {

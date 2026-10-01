@@ -192,6 +192,13 @@ private:
         TreeIter source = new TreeIter();
         ts.getIter(source, pathSource);
 
+        // Dropping a bookmark on itself or a folder into its own sub-tree would
+        // detach the folder from the root, losing it and everything in it
+        if (pathSource.compare(pathTarget) == 0 || pathSource.isAncestor(pathTarget)) {
+            trace("Ignoring drop of bookmark on itself or its own children");
+            return;
+        }
+
         //Move bookmark first
         Bookmark bmTarget = bmMgr.get(ts.getValueString(target, Columns.UUID));
         Bookmark bmSource = bmMgr.get(ts.getValueString(source, Columns.UUID));
@@ -248,10 +255,24 @@ private:
                 break;
         }
 
-        foreach(column; EnumMembers!Columns) {
-            ts.setValue(iter, column, ts.getValue(source, column));
-        }
+        copyRow(source, iter);
         ts.remove(source);
+    }
+
+    /**
+     * Copies the values of a row along with all of its children, i.e. the
+     * contents of a folder, to another row.
+     */
+    void copyRow(TreeIter source, TreeIter dest) {
+        foreach(column; EnumMembers!Columns) {
+            ts.setValue(dest, column, ts.getValue(source, column));
+        }
+        TreeIter child;
+        if (ts.iterChildren(child, source)) {
+            do {
+                copyRow(child, ts.append(dest));
+            } while (ts.iterNext(child));
+        }
     }
 
     void setupDragAndDrop() {

@@ -86,9 +86,13 @@ bool showConfirmDialog(Window parent, string message, GSettings settings = null,
 
     MessageDialog dialog = new MessageDialog(parent, DialogFlags.MODAL + DialogFlags.USE_HEADER_BAR, MessageType.QUESTION, ButtonsType.OK_CANCEL,
             message, null);
-    CheckButton cbPrompt = new CheckButton(_("Do not show this again"));
-    cbPrompt.setMarginLeft(12);
-    dialog.getContentArea().add(cbPrompt);
+    // Only offer to stop prompting if there is a setting to store it in
+    CheckButton cbPrompt;
+    if (settings !is null) {
+        cbPrompt = new CheckButton(_("Do not show this again"));
+        cbPrompt.setMarginLeft(12);
+        dialog.getContentArea().add(cbPrompt);
+    }
     dialog.setDefaultResponse(ResponseType.CANCEL);
     scope (exit) {
         dialog.destroy();
@@ -98,6 +102,6 @@ bool showConfirmDialog(Window parent, string message, GSettings settings = null,
     if (dialog.run() != ResponseType.OK) {
         result = false;
     }
-    settings.setBoolean(promptKey, !cbPrompt.getActive());
+    if (settings !is null) settings.setBoolean(promptKey, !cbPrompt.getActive());
     return result;
 }

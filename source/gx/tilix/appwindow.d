@@ -1575,20 +1575,25 @@ private:
 
             fcd.addOnResponse(delegate(int response, Dialog) {
                 if (response == ResponseType.OK) {
-                    try {
-                        string filename = fcd.getFilename();
-                        if (!filename.endsWith(".json")) {
-                            filename ~= ".json";
+                    string filename = fcd.getFilename();
+                    if (!filename.endsWith(".json")) {
+                        filename ~= ".json";
+                        // The file chooser only confirmed overwriting the name without the extension
+                        if (exists(filename) && !showConfirmDialog(fcd, format(_("A file named '%s' already exists, replace it?"), baseName(filename)))) {
+                            // Leave the file chooser open so another name can be picked
+                            return;
                         }
+                    }
+                    try {
                         dialogPaths[DialogPath.SAVE_SESSION] = fcd.getCurrentFolder();
-                        addRecentSessionFile(filename);
-                        string json = session.serialize().toPrettyString();
+                        string json = session.serializeToJSON();
                         write(filename, json);
                         session.filename = filename;
+                        // Only add once saved so a failed save doesn't leave a stale entry
+                        addRecentSessionFile(filename);
                     }
                     catch (Exception e) {
                         fcd.hide();
-                        removeRecentSessionFile(fcd.getFilename());
                         error(e);
                         showErrorDialog(this, _("Could not save session due to unexpected error.") ~ "\n" ~ e.msg, _("Error Saving Session"));
                     }
