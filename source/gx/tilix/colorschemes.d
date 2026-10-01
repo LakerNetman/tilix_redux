@@ -20,6 +20,7 @@ import gx.gtk.color;
 import gx.gtk.util;
 import gx.i18n.l10n;
 import gx.tilix.constants;
+import gx.util.file;
 
 enum SCHEMES_FOLDER = "schemes";
 
@@ -287,7 +288,8 @@ private void saveScheme(ColorScheme scheme, string filename) {
     JSONValue value = schemeToJson(scheme);
     value[SCHEME_KEY_NAME] = stripExtension(baseName(filename));
     string json = value.toPrettyString();
-    write(filename, json);
+    // So a crash or full disk part way through writing never leaves a truncated scheme
+    writeFileAtomic(filename, json);
 }
 
 private void parseColor(RGBA rgba, string value) {
@@ -323,4 +325,25 @@ unittest {
     assert(!solarizedDark.equalColor(solarizedLight));
     assert(!solarizedLight.equalColor(solarizedDark));
     assert(solarizedDark.equalColor(loadScheme(buildPath(schemes, "solarized-dark.json"))));
+}
+
+// Saving a scheme and loading it again gives the same colors, and replaces an
+// existing file without leaving a temporary file behind
+unittest {
+    import std.array : array;
+    import std.process : thisProcessID;
+
+    string dir = buildPath(tempDir(), "tilix-scheme-test-" ~ to!string(thisProcessID()));
+    mkdirRecurse(dir);
+    scope(exit) rmdirRecurse(dir);
+    string schemes = buildNormalizedPath(dirName(__FILE_FULL_PATH__), "..", "..", "..", "data", "schemes");
+    ColorScheme original = loadScheme(buildPath(schemes, "solarized-light.json"));
+
+    string filename = buildPath(dir, "My Scheme.json");
+    std.file.write(filename, "old content");
+    saveScheme(original, filename);
+    ColorScheme saved = loadScheme(filename);
+    assert(saved.name == "My Scheme");
+    assert(saved.equalColor(original));
+    assert(dirEntries(dir, SpanMode.shallow).array.length == 1);
 }
