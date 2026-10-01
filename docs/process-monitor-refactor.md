@@ -1,11 +1,11 @@
 # Proposal: refactor process detection
 
-Status: steps 0–3 of the migration plan are done, steps 4–5 are proposals. It covers
+Status: steps 0–4 of the migration plan are done, step 5 is a proposal. It covers
 `source/gx/tilix/terminal/activeprocess.d` and `source/gx/tilix/terminal/monitor.d`.
 
 ## What the code did before the refactor
 
-This describes the code before steps 0–3. When the hidden `process-monitor` setting is on, Tilix shows the command running in each
+This describes the code before steps 0–4. When the hidden `process-monitor` setting is on, Tilix shows the command running in each
 terminal (the `${process}` title variable):
 
 1. `ProcessMonitor` starts a thread that calls `getActiveProcessList()` every 300 ms.
@@ -21,14 +21,14 @@ terminal (the `${process}` title variable):
 
 | # | Problem | Effect |
 |---|---|---|
-| 1 | **The locks don't lock.** `monitor.d` uses four bare `synchronized { }` blocks. In D, each bare `synchronized` statement gets its *own* mutex, so the monitor thread iterating `processes` and the UI thread adding or removing entries (`addProcess`/`removeProcess`) don't exclude each other. | A data race on an associative array. Opening or closing terminals while the monitor scans could corrupt the map or crash. **Fixed in step 0.** |
+| 1 | **The locks don't lock.** `monitor.d` uses four bare `synchronized { }` blocks. In D, each bare `synchronized` statement gets its *own* mutex, so the monitor thread iterating `processes` and the UI thread adding or removing entries (`addProcess`/`removeProcess`) don't exclude each other. | A data race on an associative array. Opening or closing terminals while the monitor scans could corrupt the map or crash. **Fixed in step 0** with one shared lock. **Step 4 removed the shared state and the lock altogether.** |
 | 2 | **Stale cached data.** A `Process` is parsed once and cached by pid. After `fork` and before `exec`, a child has the shell's name. If the scan catches it in that window, the name stays wrong for the life of the process. Pid reuse has the same effect. | Titles show `bash` instead of `vim` until the command exits. **Fixed in steps 2–3:** there is no cache any more, every scan reads fresh stats, and a change is detected by pid *and* start time, so a pid reused by a new command is noticed. |
 | 3 | **It scans the whole system.** Every 300 ms it lists all of `/proc` and re-reads `stat` for every process with a terminal, not just Tilix's. | Constant background I/O that grows with the number of processes on the machine, including other terminal apps. **Fixed in step 3:** only the watched shells and their descendants are read. |
 | 4 | **The scan runs inside the lock.** All that I/O happens inside `synchronized`, which would block the UI thread's `fireEvents` if the locks worked. | Fixing #1 alone would add UI stalls. **Fixed in step 0.** |
 | 5 | **It doesn't work in Flatpak.** Shells run on the host through `HostCommand`, but the monitor reads the sandbox's `/proc`, which can't see host processes. That's the `TODO: be correct for flatpak sandbox` in `terminal.d`. | `${process}` never works in the Flatpak. |
 | 6 | **A failure stops monitoring.** An exception in the spawned thread, such as a `to!long` on unexpected `stat` content, ends the thread and nothing restarts it. | Monitoring stops for the rest of the session. **Fixed in step 2:** each scan is wrapped in `try`/`catch`. |
 | 7 | **It can't be tested.** It reads the real `/proc` into static global state from another thread. | This is why it was left out of the new unit tests. **Fixed in steps 1–2:** the logic is pure functions, and the monitor takes a `ProcessSource` that tests can fake. |
-| 8 | **Event types are unused.** `MonitorEventType` has `CHANGED` and `FINISHED`, but only `STARTED` is ever emitted. When a command exits, the idle shell becomes the active process and is reported as `STARTED`. | Titles are correct, but handlers can't tell a command finishing from one starting. |
+| 8 | **Event types are unused.** `MonitorEventType` has `CHANGED` and `FINISHED`, but only `STARTED` is ever emitted. When a command exits, the idle shell becomes the active process and is reported as `STARTED`. | Titles are correct, but handlers can't tell a command finishing from one starting. **Fixed in step 4:** `STARTED`, `CHANGED` and `FINISHED` are all emitted. |
 
 ## Proposed design
 
@@ -123,14 +123,33 @@ Still possible later: natively, `tcgetpgrp(pty fd)` gives the foreground process
 touching `/proc`, as gnome-terminal and VTE do, but it needs the pty, which the monitor thread
 doesn't have.
 
-### 4. Pass messages instead of sharing state
+### 4. Pass messages instead of sharing state (done in step 4)
 
-- The monitor thread owns its state. It gets the list of shells to watch as `std.concurrency`
-  messages (`Watch(pid)`, `Unwatch(pid)`), and sends results back as an immutable
-  `ProcStat[pid_t]` message.
-- The UI thread receives them in the existing timeout, runs `diffActiveProcesses` and emits.
+- **The monitor thread owns its state** (`MonitorState`): the shells it watches and the last
+  result it sent. The UI thread changes the list with `Watch(gpid)` and `Unwatch(gpid)`
+  messages, and ends the thread with `Stop()`.
+- **Each scan sends results only if something changed**, as an `ActiveProcesses` message
+  holding an immutable array of the active `ProcStat`s. A newly watched shell always triggers a
+  send, because a shell unwatched and watched again between scans gives a result identical to
+  the last one sent, while the UI thread has reset that shell.
+- **The UI thread keeps the active process last seen per shell.** Its existing 300 ms timeout
+  takes the latest result from its message queue, ignoring older ones, and works out the events
+  with `monitorEvents`. It emits them only after working them all out, so handlers can add or
+  remove processes safely.
+- **Each start of the monitor thread gets a new generation number**, carried in its results.
+  Results from a thread that was stopped are ignored, and `stop()` discards any that are still
+  queued.
+- **The event types now mean something:**
+  - `STARTED`: the first active process seen for a shell, or a command starting while the shell
+    was idle
+  - `CHANGED`: one command replaced by another, including a new command reusing the previous
+    one's pid
+  - `FINISHED`: the shell is active again
 
-With no shared mutable state, problems 1 and 4 go away, and no locks are needed.
+  Terminals only use the name, so titles behave as before.
+
+With no shared mutable state, the `shared` map, `ProcessStatus` and `processesLock` are gone,
+and so are problems 1 and 4.
 
 ### 5. Recover from failures (done in step 2)
 
@@ -147,7 +166,7 @@ Each step can ship on its own and keeps today's behaviour until the last one.
 | 1 | **Done.** Added `ProcStat`, `parseStat`, `activeProcesses` and `diffActiveProcesses`, replacing the `Process` class and its static maps. | Low | Fixture-based unit tests. On this machine's live `/proc`, the old and new code gave identical results in 40 scans, including a running command, a pipeline and nested commands |
 | 2 | **Done.** Added `ProcessSource` and `ProcFsSource` with a configurable root, plus `scanProcesses(ProcessSource)` in the monitor, with each scan inside `try`/`catch`. | Low | Fake `/proc` in a temp folder, and `FakeSource`-driven monitor tests |
 | 3 | **Done.** Read only the watched shells and their descendants through the `children` files, with a fallback to a full scan, no cache, and changes detected by pid and start time. | Medium: pipelines and job control need care | Fake `/proc` covering pipelines, nested commands, children of other threads, background jobs, `sh -c`, other sessions, exited children, the fallback and pid reuse, plus a check that an idle terminal reads only its shell. Compared with step 2 on a live system |
-| 4 | Pass messages instead of `shared` and `synchronized`, and emit `CHANGED`/`FINISHED`. | Medium | Extend the `FakeSource`-driven monitor tests |
+| 4 | **Done.** Message passing between the threads, with no shared state or locks, generation numbers for stale results, and `STARTED`/`CHANGED`/`FINISHED` events. | Medium | Pure tests for the event types and for when the monitor thread sends; tests of the UI side with injected messages (stale and superseded results, handlers removing processes); and a test with a real monitor thread against a fake `/proc`, passing 30 out of 30 runs, 5 of them with every CPU core busy |
 | 5 | Add the `list-sessions` toolbox subcommand and `FlatpakHostSource`. | Medium: needs the Flatpak manual test | Parsing unit-tested; the rest follows `tests/manual/flatpak-host-commands.md` |
 
 A rough size: step 0 is a few lines. Steps 1–2 are about a day each, including tests. Steps 3–5
