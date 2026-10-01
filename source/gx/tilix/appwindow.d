@@ -1673,6 +1673,21 @@ private:
         }
     }
 
+    /**
+     * Whether one of Tilix's own windows other than a terminal window has the
+     * focus, i.e. Preferences or a dialog. The quake window stays visible for
+     * those, while it hides for other applications and other terminal windows.
+     */
+    bool ownSecondaryWindowHasFocus() {
+        ListG list = Window.listToplevels();
+        if (list is null) return false;
+        foreach (Window window; list.toArray!(Window)()) {
+            if (window.getWindowStruct() == this.getWindowStruct()) continue;
+            if (window.isActive() && cast(AppWindow) window is null) return true;
+        }
+        return false;
+    }
+
     void removeTimeout() {
         if (timeoutID > 0) {
             g_source_remove(timeoutID);
@@ -1792,6 +1807,12 @@ public:
                 timeoutID = threadsAddTimeoutDelegate(gsSettings.getInt(SETTINGS_QUAKE_HIDE_LOSE_FOCUS_DELAY_KEY), delegate() {
                     // The source is removed once this returns false, don't remove it again
                     timeoutID = 0;
+                    // Focus has settled by now, checking when focus was lost isn't enough
+                    // since the newly focused window may not be active yet
+                    if (ownSecondaryWindowHasFocus()) {
+                        trace("Focus is in one of Tilix's own windows, i.e. Preferences, not hiding quake window");
+                        return false;
+                    }
                     trace("Focus lost and timeout reached, hiding quake window");
                     if (isVisible()) {
                         this.hide();
