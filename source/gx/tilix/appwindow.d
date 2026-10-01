@@ -29,6 +29,7 @@ import gtkc.giotypes : GApplicationFlags;
 import gdkpixbuf.Pixbuf;
 
 import gdk.Event;
+import gdk.Window : GdkWindow = Window;
 import gdk.Keysyms;
 import gdk.RGBA;
 import gdk.Screen;
@@ -210,6 +211,10 @@ private:
     string[DialogPath] dialogPaths;
 
     uint timeoutID;
+
+    // The window's size when not maximized, full screen or tiled, saved on close
+    int normalWidth = -1;
+    int normalHeight = -1;
 
     bool isCSDDisabled() {
         return windowStyle > 0;
@@ -1201,6 +1206,10 @@ private:
 
     void onWindowDestroyed(Widget) {
         tracef("AppWindow %s destroyed", uuid);
+        if (normalWidth > 0 && normalHeight > 0 && !isQuake() && gsSettings.getBoolean(SETTINGS_WINDOW_SAVE_STATE_KEY)) {
+            gsSettings.setInt(SETTINGS_WINDOW_WIDTH_KEY, normalWidth);
+            gsSettings.setInt(SETTINGS_WINDOW_HEIGHT_KEY, normalHeight);
+        }
         _destroyed = true;
         tilix.withdrawNotification(uuid);
         tilix.removeAppWindow(this);
@@ -1231,7 +1240,9 @@ private:
             } else if (getCurrentSession() !is null) {
                 getCurrentSession().focusTerminal(1);
             }
-        } else if (tilix.getGlobalOverrides().geometry.flag == GeometryFlag.NONE && !isWayland(this) && gsSettings.getBoolean(SETTINGS_WINDOW_SAVE_STATE_KEY)) {
+        } else if (restoresWindowState()) {
+            // Wayland doesn't let applications place windows, but maximizing and
+            // full screen work, so these are restored there too
             GdkWindowState state = cast(GdkWindowState)gsSettings.getInt(SETTINGS_WINDOW_STATE_KEY);
             if (state & GdkWindowState.MAXIMIZED) {
                 maximize();
@@ -1688,6 +1699,15 @@ private:
         return false;
     }
 
+    /**
+     * Whether the saved window size and state are restored for this window. A
+     * geometry from the command line and quake mode take precedence.
+     */
+    bool restoresWindowState() {
+        return !isQuake() && tilix.getGlobalOverrides().geometry.flag == GeometryFlag.NONE &&
+            gsSettings.getBoolean(SETTINGS_WINDOW_SAVE_STATE_KEY);
+    }
+
     void removeTimeout() {
         if (timeoutID > 0) {
             g_source_remove(timeoutID);
@@ -1832,6 +1852,20 @@ public:
             }
             return false;
         });
+        addOnConfigure(delegate(GdkEventConfigure* event, Widget) {
+            // Remember the size the window has when it isn't maximized, full screen or
+            // tiled, so it can be restored even if it's closed while maximized
+            GdkWindow gdkWindow = getWindow();
+            if (gdkWindow !is null) {
+                enum notNormal = GdkWindowState.MAXIMIZED | GdkWindowState.FULLSCREEN | GdkWindowState.ICONIFIED |
+                    GdkWindowState.TILED | GdkWindowState.LEFT_TILED | GdkWindowState.RIGHT_TILED |
+                    GdkWindowState.TOP_TILED | GdkWindowState.BOTTOM_TILED;
+                if ((gdkWindow.getState() & notNormal) == 0) {
+                    getSize(normalWidth, normalHeight);
+                }
+            }
+            return false;
+        });
         addOnWindowState(delegate(GdkEventWindowState* state, Widget) {
             trace("Window state changed");
             if ((state.newWindowState & GdkWindowState.FULLSCREEN) == GdkWindowState.FULLSCREEN) {
@@ -1853,6 +1887,12 @@ public:
     }
 
     void initialize() {
+        // A session file's own size, applied when it loads, takes precedence
+        if (restoresWindowState() && tilix.getGlobalOverrides().session.length == 0) {
+            int width = gsSettings.getInt(SETTINGS_WINDOW_WIDTH_KEY);
+            int height = gsSettings.getInt(SETTINGS_WINDOW_HEIGHT_KEY);
+            if (width > 0 && height > 0) setDefaultSize(width, height);
+        }
         if (tilix.getGlobalOverrides().session.length > 0) {
             foreach (sessionFilename; tilix.getGlobalOverrides().session) {
                 try {
