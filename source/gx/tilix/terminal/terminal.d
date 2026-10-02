@@ -124,6 +124,7 @@ import gx.gtk.cairo;
 import gx.gtk.color;
 import gx.gtk.clipboard;
 import gx.gtk.dialog;
+import gx.gtk.threads : threadsAddTimeoutDelegate;
 import gx.gtk.resource;
 import gx.gtk.util;
 import gx.gtk.vte;
@@ -262,6 +263,9 @@ private:
     string _overrideTitle;
     //overrides command when load from session JSON
     string _overrideCommand;
+    // Lines still to send for a paste with a delay between lines, see pasteWithLineDelay
+    string[] delayedPasteLines;
+    uint delayedPasteTimeoutID;
     //overrides badge
     string _overrideBadge;
     //Whether synchronized input is turned on in the session
@@ -556,6 +560,11 @@ private:
             } else {
                 paste(GDK_SELECTION_PRIMARY);
             }
+        });
+
+        //Paste as a single line, newlines replaced by spaces
+        registerActionWithSettings(group, ACTION_PREFIX, ACTION_PASTE_SINGLE_LINE, gsShortcuts, delegate(GVariant, SimpleAction) {
+            pasteSingleLine();
         });
 
         saAdvancedPaste = registerActionWithSettings(group, ACTION_PREFIX, ACTION_ADVANCED_PASTE, gsShortcuts, delegate(GVariant, SimpleAction) {
@@ -1457,7 +1466,12 @@ private:
         dialog.showAll();
         if (dialog.run() == ResponseType.APPLY) {
             pasteText = dialog.text;
-            vte.pasteText(pasteText[0 .. $]);
+            int lineDelay = gsSettings.getInt(SETTINGS_ADVANCED_PASTE_LINE_DELAY_KEY);
+            if (lineDelay > 0 && pasteText.indexOf("\n") >= 0) {
+                pasteWithLineDelay(pasteText, lineDelay);
+            } else {
+                vte.pasteText(pasteText[0 .. $]);
+            }
             if (gsProfile.getBoolean(SETTINGS_PROFILE_SCROLL_ON_INPUT_KEY)) {
                 scrollToBottom();
             }
@@ -1469,6 +1483,54 @@ private:
             }
         }
         focusTerminal();
+    }
+
+    /**
+     * Sends text a line at a time with a delay between lines, as if typed, for
+     * devices that freeze when sent a large paste at once. Lines are typed rather
+     * than pasted so a shell runs each one as it arrives. A paste started while
+     * another is in progress is added after it.
+     */
+    void pasteWithLineDelay(string text, int delay) {
+        delayedPasteLines ~= pasteLines(text);
+        if (delayedPasteTimeoutID > 0) return;
+        if (delayedPasteLines.length > 0) {
+            vte.feedChild(delayedPasteLines[0]);
+            delayedPasteLines = delayedPasteLines[1 .. $];
+        }
+        if (delayedPasteLines.length == 0) return;
+        delayedPasteTimeoutID = threadsAddTimeoutDelegate(delay, delegate() {
+            if (vte is null || delayedPasteLines.length == 0) {
+                delayedPasteTimeoutID = 0;
+                return false;
+            }
+            vte.feedChild(delayedPasteLines[0]);
+            delayedPasteLines = delayedPasteLines[1 .. $];
+            if (delayedPasteLines.length == 0) {
+                delayedPasteTimeoutID = 0;
+                return false;
+            }
+            return true;
+        });
+    }
+
+    /**
+     * Pastes the clipboard as a single line, newlines replaced by spaces, i.e. a
+     * column of names as a list of arguments
+     */
+    void pasteSingleLine() {
+        string text = joinLines(Clipboard.get(GDK_SELECTION_CLIPBOARD).waitForText());
+        if (text.length == 0) return;
+        vte.pasteText(text);
+        if (gsProfile.getBoolean(SETTINGS_PROFILE_SCROLL_ON_INPUT_KEY)) {
+            scrollToBottom();
+        }
+        static if (!USE_COMMIT_SYNCHRONIZATION) {
+            if (isSynchronizedInput()) {
+                SyncInputEvent se = SyncInputEvent(_terminalUUID, SyncInputEventType.INSERT_TEXT, null, text);
+                onSyncInput.emit(this, se);
+            }
+        }
     }
 
     void paste(GdkAtom source) {
@@ -1987,8 +2049,19 @@ private:
                 }
             case MouseButton.SECONDARY:
                 trace("Enabling actions");
-                if (!(event.button.state & (GdkModifierType.SHIFT_MASK | GdkModifierType.CONTROL_MASK | GdkModifierType.MOD1_MASK)) && vte.onButtonPressEvent(event.button))
+                bool modified = (event.button.state & (GdkModifierType.SHIFT_MASK | GdkModifierType.CONTROL_MASK | GdkModifierType.MOD1_MASK)) != 0;
+                if (!modified && vte.onButtonPressEvent(event.button))
                     return true;
+                // Right click can paste instead, the menu stays on Shift+right click and the Menu key
+                if (!modified && gsSettings.getString(SETTINGS_RIGHT_CLICK_ACTION_KEY) == SETTINGS_RIGHT_CLICK_ACTION_PASTE_VALUE) {
+                    widget.grabFocus();
+                    if (gsSettings.getBoolean(SETTINGS_PASTE_ADVANCED_DEFAULT_KEY)) {
+                        advancedPaste(GDK_SELECTION_CLIPBOARD);
+                    } else {
+                        paste(GDK_SELECTION_CLIPBOARD);
+                    }
+                    return true;
+                }
 
                 widget.grabFocus();
                 showContextPopover(event);
@@ -3907,6 +3980,12 @@ public:
         if (timeoutID > 0) {
             g_source_remove(timeoutID);
             timeoutID = 0;
+        }
+        // Stop a paste with a delay between lines that is still in progress
+        delayedPasteLines = null;
+        if (delayedPasteTimeoutID > 0) {
+            g_source_remove(delayedPasteTimeoutID);
+            delayedPasteTimeoutID = 0;
         }
         if (sagTerminalActions !is null) {
             sagTerminalActions.destroy();

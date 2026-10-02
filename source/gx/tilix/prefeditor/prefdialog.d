@@ -1605,6 +1605,15 @@ private:
         lblClipboard.setHalign(GtkAlign.START);
         add(lblClipboard);
 
+        //Right click action
+        Box bRightClick = new Box(Orientation.HORIZONTAL, 6);
+        bRightClick.add(new Label(_("Right click")));
+        ComboBox cbRightClick = createNameValueCombo([_("Show menu"), _("Paste")], SETTINGS_RIGHT_CLICK_ACTION_VALUES);
+        cbRightClick.setTooltipText(_("When pasting, Shift+right click and the Menu key still show the menu"));
+        bh.bind(SETTINGS_RIGHT_CLICK_ACTION_KEY, cbRightClick, "active-id", GSettingsBindFlags.DEFAULT);
+        bRightClick.add(cbRightClick);
+        add(bRightClick);
+
         //Advacned paste is default
         CheckButton cbAdvDefault = new CheckButton(_("Always use advanced paste dialog"));
         bh.bind(SETTINGS_PASTE_ADVANCED_DEFAULT_KEY, cbAdvDefault, "active", GSettingsBindFlags.DEFAULT);

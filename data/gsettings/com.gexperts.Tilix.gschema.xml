@@ -468,6 +468,26 @@
       <summary>The number of spaces to use when replacing tabs</summary>
       <description>When using advanced paste, the number of spaces to use when replacing tabs.</description>
     </key>
+    <key name="advanced-paste-replace-newlines" type="b">
+      <default>false</default>
+      <summary>Replace newlines with spaces</summary>
+      <description>If true, advanced paste joins the lines into one, separated by spaces, skipping empty lines.</description>
+    </key>
+    <key name="advanced-paste-line-delay" type="i">
+      <range min="0" max="10000"/>
+      <default>0</default>
+      <summary>Delay in milliseconds between pasted lines</summary>
+      <description>If more than 0, advanced paste sends the text a line at a time with this delay, as if typed, i.e. for devices that can't take a large paste at once.</description>
+    </key>
+    <key name="right-click-action" type="s">
+      <choices>
+        <choice value='menu'/>
+        <choice value='paste'/>
+      </choices>
+      <default>'menu'</default>
+      <summary>What a right click in a terminal does</summary>
+      <description>Either shows the context menu or pastes the clipboard. When pasting, Shift+right click and the Menu key still show the menu.</description>
+    </key>
     <key name="advanced-paste-replace-crlf" type="b">
       <default>false</default>
       <summary>Replace CRLF with LF</summary>
@@ -1192,6 +1212,10 @@
     <key name="terminal-advanced-paste" type="s">
       <default>'disabled'</default>
       <summary>Keyboard shortcut to paste text in terminal from clipboard via advanced paste dialog</summary>
+    </key>
+    <key name="terminal-paste-single-line" type="s">
+      <default>'disabled'</default>
+      <summary>Keyboard shortcut to paste the clipboard as a single line, with newlines replaced by spaces</summary>
     </key>
     <key name="terminal-select-all" type="s">
       <default>'&lt;Ctrl&gt;&lt;Shift&gt;a'</default>
