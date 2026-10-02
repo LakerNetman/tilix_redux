@@ -123,6 +123,8 @@ enum VARIABLE_TERMINAL_TITLE = "${title}";
 enum VARIABLE_TERMINAL_ICON_TITLE = "${iconTitle}";
 enum VARIABLE_TERMINAL_ID = "${id}";
 enum VARIABLE_TERMINAL_DIR = "${directory}";
+enum VARIABLE_TERMINAL_DIR_NAME = "${directoryName}";
+enum VARIABLE_TERMINAL_GIT_REPO = "${gitRepo}";
 enum VARIABLE_TERMINAL_COLUMNS = "${columns}";
 enum VARIABLE_TERMINAL_ROWS = "${rows}";
 enum VARIABLE_TERMINAL_HOSTNAME = "${hostname}";
@@ -138,6 +140,8 @@ immutable string[] VARIABLE_TERMINAL_VALUES = [
     VARIABLE_TERMINAL_ICON_TITLE ,
     VARIABLE_TERMINAL_ID,
     VARIABLE_TERMINAL_DIR,
+    VARIABLE_TERMINAL_DIR_NAME,
+    VARIABLE_TERMINAL_GIT_REPO,
     VARIABLE_TERMINAL_HOSTNAME,
     VARIABLE_TERMINAL_USERNAME,
     VARIABLE_TERMINAL_COLUMNS,
@@ -153,6 +157,8 @@ immutable string[] VARIABLE_TERMINAL_LOCALIZED = [
     N_("Icon title"),
     N_("ID"),
     N_("Directory"),
+    N_("Directory name"),
+    N_("Git repository"),
     N_("Hostname"),
     N_("Username"),
     N_("Columns"),
