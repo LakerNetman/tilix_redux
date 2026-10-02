@@ -1541,6 +1541,11 @@ private:
         bh.bind(SETTINGS_PROMPT_ON_NEW_SESSION_KEY, cbPrompt, "active", GSettingsBindFlags.DEFAULT);
         add(cbPrompt);
 
+        //New sessions next to the current one
+        CheckButton cbNewAfterCurrent = new CheckButton(_("Open new sessions next to the current one"));
+        bh.bind(SETTINGS_NEW_SESSION_AFTER_CURRENT_KEY, cbNewAfterCurrent, "active", GSettingsBindFlags.DEFAULT);
+        add(cbNewAfterCurrent);
+
         //Focus follows the mouse
         CheckButton cbFocusMouse = new CheckButton(_("Focus a terminal when the mouse moves over it"));
         bh.bind(SETTINGS_TERMINAL_FOCUS_FOLLOWS_MOUSE_KEY, cbFocusMouse, "active", GSettingsBindFlags.DEFAULT);

@@ -182,6 +182,11 @@
       <summary>Whether to automatically hide the mouse pointer when typing</summary>
       <description>If true, the mouse pointer is hidden when the user starts typing and shown again when interaction with the mouse occurs.</description>
     </key>
+    <key name="new-session-after-current" type="b">
+      <default>false</default>
+      <summary>Whether new sessions open next to the current one</summary>
+      <description>If true, a new session is placed right after the current session rather than at the end.</description>
+    </key>
     <key name="prompt-on-new-session" type="b">
       <default>false</default>
       <summary>Whether to prompt for session settings or use defaults</summary>
