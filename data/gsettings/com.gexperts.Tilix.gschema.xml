@@ -1149,6 +1149,10 @@
       <default>'disabled'</default>
       <summary>Keyboard shortcut to set a customize layout options for the terminal</summary>
     </key>
+    <key name="terminal-rename" type="s">
+      <default>'&lt;Shift&gt;&lt;Ctrl&gt;R'</default>
+      <summary>Keyboard shortcut to rename the terminal</summary>
+    </key>
     <key name="terminal-close" type="s">
       <default>'&lt;Shift&gt;&lt;Ctrl&gt;W'</default>
       <summary>Keyboard shortcut to close the terminal</summary>

@@ -552,6 +552,12 @@
               </object>
             </child>
             <child>
+              <object class="GtkShortcutsShortcut" id ="terminal-rename">
+                <property name="visible">1</property>
+                <property name="title" translatable="yes" context="shortcut window">Rename terminal</property>
+              </object>
+            </child>
+            <child>
               <object class="GtkShortcutsShortcut" id ="terminal-layout">
                 <property name="visible">1</property>
                 <property name="title" translatable="yes" context="shortcut window">Layout options</property>
