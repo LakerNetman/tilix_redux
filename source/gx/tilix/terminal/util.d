@@ -157,3 +157,27 @@ unittest {
     assert(initCommandText("") == "");
     assert(initCommandText("   ") == "");
 }
+
+/**
+ * Returns the title override to store for a title entered when renaming a
+ * terminal. An empty title, or the profile's own title, means no override so
+ * the terminal keeps following the profile's title.
+ */
+string titleOverrideFor(string entered, string profileTitle) {
+    import std.string : strip;
+
+    string title = entered.strip();
+    return (title.length == 0 || title == profileTitle) ? null : title;
+}
+
+unittest {
+    assert(titleOverrideFor("web server", "${title}") == "web server");
+    // Surrounding spaces are dropped, inner ones kept
+    assert(titleOverrideFor("  db   backup ", "${title}") == "db   backup");
+    // Variables can be used like in the profile's title
+    assert(titleOverrideFor("${hostname}: logs", "${title}") == "${hostname}: logs");
+    // Empty, or unchanged from the profile, follows the profile again
+    assert(titleOverrideFor("", "${title}") is null);
+    assert(titleOverrideFor("   ", "${title}") is null);
+    assert(titleOverrideFor("${title}", "${title}") is null);
+}

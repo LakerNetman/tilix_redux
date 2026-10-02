@@ -618,6 +618,17 @@ private:
             gsSettings.setString(SETTINGS_TERMINAL_TITLE_STYLE_KEY, SETTINGS_TERMINAL_TITLE_STYLE_VALUES[index]);
         });
 
+        //Rename the terminal, a quicker way to set the title than Layout Options
+        registerActionWithSettings(group, ACTION_PREFIX, ACTION_RENAME, gsShortcuts, delegate(GVariant, SimpleAction) {
+            string profileTitle = gsProfile.getString(SETTINGS_PROFILE_TITLE_KEY);
+            string title;
+            if (showInputDialog(cast(Window) getToplevel(), title, _overrideTitle.length == 0 ? profileTitle : _overrideTitle,
+                    _("Rename Terminal"), _("Enter a title for this terminal. Leave it empty to use the profile's title."))) {
+                _overrideTitle = titleOverrideFor(title, profileTitle);
+                updateDisplayText();
+            }
+        });
+
         //Override terminal title
         registerActionWithSettings(group, ACTION_PREFIX, ACTION_LAYOUT, gsShortcuts, delegate(GVariant, SimpleAction) {
             LayoutDialog dialog = new LayoutDialog(cast(Window) getToplevel());
@@ -844,6 +855,7 @@ private:
      */
     void createPopoverMenuItems(GMenu model) {
         GMenu menuSection = new GMenu();
+        menuSection.append(_("Rename…"), getActionDetailedName(ACTION_PREFIX, ACTION_RENAME));
         menuSection.append(_("Find…"), getActionDetailedName(ACTION_PREFIX, ACTION_FIND));
         menuSection.append(_("Read-Only"), getActionDetailedName(ACTION_PREFIX, ACTION_READ_ONLY));
         model.appendSection(null, menuSection);
@@ -1902,10 +1914,13 @@ private:
             mmContext.appendItem(clipItem);
         }
         // Maximize is always offered, it's quicker than the small title bar button
-        // in a busy layout. The other title bar items are only added when it's hidden.
+        // in a busy layout. The other title bar items are only added when it's hidden,
+        // except Rename which would otherwise only be in the title bar menu.
         GMenu windowSection = new GMenu();
         windowSection.append(terminalWindowState == TerminalWindowState.MAXIMIZED ? _("Restore") : _("Maximize"), getActionDetailedName(ACTION_PREFIX, ACTION_MAXIMIZE));
-        if (!bTitle.isVisible()) {
+        if (bTitle.isVisible()) {
+            windowSection.append(_("Rename…"), getActionDetailedName(ACTION_PREFIX, ACTION_RENAME));
+        } else {
             windowSection.append(_("Close"), getActionDetailedName(ACTION_PREFIX, ACTION_CLOSE));
         }
         mmContext.appendSection(null, windowSection);

@@ -9,6 +9,7 @@ enum ACTION_FIND = "find";
 enum ACTION_FIND_PREVIOUS = "find-previous";
 enum ACTION_FIND_NEXT = "find-next";
 enum ACTION_LAYOUT = "layout";
+enum ACTION_RENAME = "rename";
 enum ACTION_CLOSE = "close";
 enum ACTION_MAXIMIZE = "maximize";
 enum ACTION_ENCODING_SELECT = "encoding-select";
