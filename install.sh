@@ -109,6 +109,9 @@ install -Dm 644 data/dbus/com.gexperts.Tilix.service -t "$PREFIX/share/dbus-1/se
 # Copy GNOME Shell search provider
 install -Dm 644 data/gnome-shell/com.gexperts.Tilix.search-provider.ini -t "$PREFIX/share/gnome-shell/search-providers/"
 
+# Copy Cinnamon search provider
+install -Dm 644 data/cinnamon/tilix@gexperts.com/metadata.json data/cinnamon/tilix@gexperts.com/search_provider.js -t "$PREFIX/share/cinnamon/search_providers/tilix@gexperts.com/"
+
 # Copy man page
 . "$(dirname "$(realpath "$0")")/data/scripts/install-man-pages.sh"
 

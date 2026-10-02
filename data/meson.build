@@ -119,3 +119,10 @@ install_data(
   'gnome-shell/@0@.search-provider.ini'.format(project_id),
   install_dir: datadir / 'gnome-shell' / 'search-providers'
 )
+
+# Cinnamon menu search provider, asks a running Tilix over the search provider D-Bus interface
+install_data(
+  'cinnamon/tilix@gexperts.com/metadata.json',
+  'cinnamon/tilix@gexperts.com/search_provider.js',
+  install_dir: datadir / 'cinnamon' / 'search_providers' / 'tilix@gexperts.com'
+)

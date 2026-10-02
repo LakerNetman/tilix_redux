@@ -4,7 +4,7 @@ Typing in the Activities overview finds open Tilix terminals, bookmarks and rece
 files. The D-Bus side is covered by unit tests and by `tests/manual/search-provider-dbus.sh`, which
 calls every method on a private bus without starting Tilix (it prints a pass or fail per check;
 see the script for the environment it needs). This checklist covers the parts that need a real
-GNOME Shell.
+GNOME Shell. On Cinnamon (Linux Mint), see cinnamon-search.md instead.
 
 ## Setup
 
