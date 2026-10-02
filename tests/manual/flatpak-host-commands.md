@@ -116,9 +116,8 @@ These checks exercise `get-child-pid`, and the exit status now being matched to 
   stops responding. Before the fix, an exit signal from one command could be taken for another
   command's.
 
-> `${process}` in terminal titles comes from the process monitor, not from host commands. The
-> monitor reads the sandbox's own `/proc`, so it can't see host processes. It doesn't work in the
-> Flatpak with or without these fixes. `docs/process-monitor-refactor.md` covers this.
+> `${process}` in terminal titles comes from the process monitor, not from these host commands.
+> Test 6 covers it.
 
 ## Test 5: no UI freeze
 
@@ -127,6 +126,40 @@ Open 20 terminals, then close them one after another as quickly as you can.
 - **Pass:** the window stays responsive the whole time.
 - **Fail:** a freeze longer than a second. Record which action caused it, and run
   `flatpak run --command=sh com.gexperts.Tilix -c 'G_MESSAGES_DEBUG=all tilix'` to capture the log.
+
+## Test 6: process names in titles
+
+`${process}` titles come from the process monitor. In a Flatpak it runs
+`flatpak-spawn --host <app>/bin/tilix-flatpak-toolbox list-sessions <pids>` every 300 ms, because
+the sandbox's own `/proc` can't see the shells, which run on the host.
+
+1. Turn on process monitoring, which has no Preferences option:
+
+   ```bash
+   flatpak run --command=gsettings com.gexperts.Tilix set com.gexperts.Tilix.Settings process-monitor true
+   ```
+
+2. Restart Tilix. In Preferences → Profile → General, set the terminal title to `${process}`.
+3. Open three terminals:
+   - in the first, run `top`, quit it, then run `sleep 600 | cat`
+   - in the second, run `sh -c 'sleep 600'`
+   - leave the third idle
+4. **Pass:** within a second each title shows its command: `top`, then the shell's name after
+   quitting, then `cat`, then `sleep` in the second, and the shell's name in the idle one.
+   Typing `exit` in a terminal closes it without the monitor or Tilix stalling.
+5. **Fail:** titles stay at the shell's name, show the wrong command, or lag by more than a
+   couple of seconds.
+
+   To see what the monitor sees, run the toolbox by hand. The shell pids are looked up on the
+   host, since the sandbox can't see them, and passed in:
+
+   ```bash
+   flatpak run --command=sh com.gexperts.Tilix -c 'flatpak-spawn --host "$(sed -n "s/^app-path=//p" /.flatpak-info)/bin/tilix-flatpak-toolbox" list-sessions "$@"' sh $(pgrep -x bash)
+   ```
+
+   It should print one `stat` line per shell and per process running in it. If `flatpak-spawn`
+   is missing from the runtime, monitoring logs a warning on every scan and titles stay at the
+   shell's name.
 
 ## Recording results
 
@@ -137,4 +170,5 @@ Open 20 terminals, then close them one after another as quickly as you can.
 | 3. Close prompts | | |
 | 4. Concurrent host commands | | |
 | 5. No UI freeze | | |
+| 6. Process names in titles | | |
 | Control run (optional) | | Should FAIL on the old code |

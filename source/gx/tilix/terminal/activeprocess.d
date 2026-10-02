@@ -14,6 +14,9 @@ import std.file;
 import std.path;
 import std.string;
 import std.typecons : Nullable;
+import std.utf : validate;
+
+import core.time : Duration, seconds;
 
 /**
  * The fields of /proc/<pid>/stat used to find the active process of a terminal
@@ -106,12 +109,22 @@ ProcStat[pid_t] activeProcesses(const ProcStat[] stats) {
 }
 
 /**
+ * Identifies a process instance, the start time distinguishes a process from a
+ * later one that reuses its pid
+ */
+struct ProcessId {
+    pid_t pid = -1;
+    ulong startTime;
+}
+
+/**
  * A change in the active process of a terminal
  */
 struct ActiveProcessChange {
     /// The pid of the terminal's shell
     pid_t shell;
     pid_t pid;
+    ulong startTime;
     string name;
 }
 
@@ -121,15 +134,15 @@ struct ActiveProcessChange {
  * that just exited, are left unchanged.
  *
  * Params:
- *  lastSeen = The pid of the active process last seen keyed by shell pid, -1 if none yet
+ *  lastSeen = The active process last seen keyed by shell pid, ProcessId.init if none yet
  *  active   = The current active processes keyed by shell pid, see activeProcesses
  */
-ActiveProcessChange[] diffActiveProcesses(const pid_t[pid_t] lastSeen, const ProcStat[pid_t] active) {
+ActiveProcessChange[] diffActiveProcesses(const ProcessId[pid_t] lastSeen, const ProcStat[pid_t] active) {
     ActiveProcessChange[] result;
-    foreach (shell, lastPid; lastSeen) {
+    foreach (shell, last; lastSeen) {
         const(ProcStat)* current = shell in active;
-        if (current !is null && current.pid != lastPid) {
-            result ~= ActiveProcessChange(shell, current.pid, current.name);
+        if (current !is null && (current.pid != last.pid || current.startTime != last.startTime)) {
+            result ~= ActiveProcessChange(shell, current.pid, current.startTime, current.name);
         }
     }
     return result;
@@ -149,15 +162,24 @@ interface ProcessSource {
 /**
  * Reads process stats from the proc file system.
  *
- * Stats are cached by pid. On each snapshot new processes are read and processes
- * with a controlling terminal are read again since their foreground state changes,
- * the others are not re-read. This is the same amount of reading as before the
- * process code was restructured.
+ * Only the given shells and their descendants are read, the descendants are found
+ * through /proc/<pid>/task/<tid>/children rather than reading every process on the
+ * system. For an idle shell that is the shell's stat and its children file. Stats
+ * are read fresh on every snapshot so names changed by exec are always current.
+ *
+ * Processes in the session whose parent exited, which are re-parented away from the
+ * shell, are not found. That is rare for the foreground job and those processes are
+ * usually in the background.
+ *
+ * Kernels without the children files (CONFIG_PROC_CHILDREN) fall back to reading
+ * every process in /proc for that shell.
  */
 class ProcFsSource: ProcessSource {
 private:
     string root;
-    ProcStat[pid_t] cache;
+
+    /// Limit on the descendants read for one shell, guards against a fork bomb
+    enum MAX_DESCENDANTS = 1000;
 
     pid_t[] pids() {
         return dirEntries(root, SpanMode.shallow)
@@ -168,6 +190,77 @@ private:
     }
 
     /**
+     * Returns the children of every thread of a process. Sets supported to false if
+     * the kernel doesn't provide the children files. A process that exited has none.
+     */
+    pid_t[] children(pid_t pid, out bool supported) {
+        supported = true;
+        pid_t[] result;
+        try {
+            foreach (task; dirEntries(buildPath(root, to!string(pid), "task"), SpanMode.shallow)) {
+                string file = buildPath(task.name, "children");
+                if (!exists(file)) {
+                    supported = false;
+                    return null;
+                }
+                foreach (child; readText(file).split()) {
+                    result ~= to!pid_t(child);
+                }
+            }
+        } catch (Exception e) {
+            // The process or one of its threads exited while being read
+        }
+        return result;
+    }
+
+    /**
+     * Adds the stats of the descendants of shell in its session to result. Returns
+     * false if the children files aren't supported.
+     */
+    bool addDescendants(const ProcStat shell, ref ProcStat[] result) {
+        pid_t[] queue = [shell.pid];
+        bool[pid_t] seen = [shell.pid: true];
+        size_t count = 0;
+        while (queue.length > 0 && count < MAX_DESCENDANTS) {
+            pid_t pid = queue[0];
+            queue = queue[1 .. $];
+            bool supported;
+            foreach (child; children(pid, supported)) {
+                if (child in seen) continue;
+                seen[child] = true;
+                Nullable!ProcStat stat = read(child);
+                // Children that exited or started their own session, i.e. a new
+                // terminal, aren't part of this terminal
+                if (stat.isNull || stat.get.session != shell.session) continue;
+                result ~= stat.get;
+                queue ~= child;
+                count++;
+            }
+            if (!supported) return false;
+        }
+        return true;
+    }
+
+    /// Adds every process in the session of shell, used without the children files
+    void addSession(const ProcStat shell, ref ProcStat[] result) {
+        pid_t[] all;
+        try {
+            all = pids();
+        } catch (Exception e) {
+            warning(e);
+            return;
+        }
+        foreach (pid; all) {
+            if (pid == shell.pid) continue;
+            Nullable!ProcStat stat = read(pid);
+            if (!stat.isNull && stat.get.session == shell.session) {
+                result ~= stat.get;
+            }
+        }
+    }
+
+protected:
+    /**
      * Reads the stat of a process, returns null if the process no longer exists
      * or the file can't be parsed.
      */
@@ -175,7 +268,7 @@ private:
         try {
             return parseStat(readText(buildPath(root, to!string(pid), "stat")));
         } catch (Exception e) {
-            // The process exited after the directory was listed
+            // The process exited
             return Nullable!ProcStat();
         }
     }
@@ -190,34 +283,133 @@ public:
     }
 
     ProcStat[] snapshot(const pid_t[] shells) {
-        pid_t[] current;
-        try {
-            current = pids();
-        } catch (Exception e) {
-            warning(e);
-            return [];
-        }
-        bool[pid_t] exists;
-        foreach (pid; current) exists[pid] = true;
-        foreach (pid; cache.keys) {
-            if (pid !in exists) cache.remove(pid);
-        }
-
         ProcStat[] result;
-        foreach (pid; current) {
-            ProcStat* cached = pid in cache;
-            if (cached is null || cached.ttyNr > 0) {
-                Nullable!ProcStat stat = read(pid);
-                if (stat.isNull) {
-                    cache.remove(pid);
-                    continue;
-                }
-                cache[pid] = stat.get;
-                cached = pid in cache;
+        foreach (pid; shells) {
+            Nullable!ProcStat shell = read(pid);
+            if (shell.isNull) continue;
+            result ~= shell.get;
+            // Without a terminal nothing in the session is in the foreground. The
+            // descendants are read even when the shell itself is in the foreground,
+            // a shell without job control, i.e. sh -c, runs commands in its own
+            // process group so they are in the foreground too.
+            if (shell.get.ttyNr == 0 || shell.get.tpgid <= 0) continue;
+            if (!addDescendants(shell.get, result)) {
+                addSession(shell.get, result);
             }
-            if (shells.canFind(cached.session)) {
-                result ~= *cached;
+        }
+        return result;
+    }
+}
+
+/**
+ * Runs a command and returns what it writes to stdout.
+ *
+ * Throws: an Exception if it can't be started, exits with a non zero status or takes
+ * longer than timeout, in which case it is killed.
+ */
+string runWithTimeout(string[] args, Duration timeout) {
+    import core.stdc.errno : EINTR, errno;
+    import core.sys.posix.poll : poll, pollfd, POLLIN;
+    import core.sys.posix.unistd : posixRead = read;
+    import core.time : MonoTime;
+    import std.array : appender;
+    import std.exception : ErrnoException;
+    import std.process : kill, pipeProcess, Redirect, tryWait, wait;
+
+    auto pipes = pipeProcess(args, Redirect.stdout);
+    scope(exit) {
+        if (!tryWait(pipes.pid).terminated) {
+            kill(pipes.pid);
+            wait(pipes.pid);
+        }
+    }
+    // Output is read as it arrives, a command writing more than the pipe holds
+    // would otherwise block before exiting
+    int fd = pipes.stdout.fileno;
+    MonoTime deadline = MonoTime.currTime + timeout;
+    auto output = appender!string();
+    ubyte[4096] buffer;
+    while (true) {
+        Duration left = deadline - MonoTime.currTime;
+        if (left <= Duration.zero) {
+            throw new Exception(format("%s took longer than %s", args[0], timeout));
+        }
+        pollfd pfd = pollfd(fd, POLLIN);
+        int ready = poll(&pfd, 1, cast(int) max(1, left.total!"msecs"));
+        if (ready < 0 && errno != EINTR) throw new ErrnoException("poll failed");
+        if (ready <= 0) continue;
+        auto count = posixRead(fd, buffer.ptr, buffer.length);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            throw new ErrnoException("read failed");
+        }
+        if (count == 0) break;
+        output.put(cast(const(char)[]) buffer[0 .. count]);
+    }
+    int status = wait(pipes.pid);
+    if (status != 0) {
+        throw new Exception(format("%s exited with status %d", args[0], status));
+    }
+    return output.data;
+}
+
+/**
+ * Reads process stats on the host when Tilix runs as a Flatpak.
+ *
+ * The sandbox has its own /proc which can't see the shells, they run on the host.
+ * Instead tilix-flatpak-toolbox list-sessions is run on the host with flatpak-spawn,
+ * one command per scan, and prints the stat line of each shell and its descendants
+ * in its session. It finds them the same way as ProcFsSource.
+ */
+class FlatpakHostSource: ProcessSource {
+private:
+    string[] command;
+    string delegate(string[] args) run;
+
+    /// The toolbox installed in the Flatpak's app directory, as seen from the host
+    static string toolboxPath() {
+        string section;
+        foreach (line; readText("/.flatpak-info").lineSplitter) {
+            line = line.strip();
+            if (line.startsWith("[")) {
+                section = line;
+            } else if (section == "[Instance]" && line.startsWith("app-path=")) {
+                return buildPath(line["app-path=".length .. $], "bin", "tilix-flatpak-toolbox");
             }
+        }
+        throw new FileException("/.flatpak-info", "No app-path in the Instance section");
+    }
+
+public:
+    /// Runs the toolbox in the Flatpak's app directory on the host
+    this() {
+        this(["flatpak-spawn", "--host", toolboxPath(), "list-sessions"],
+             (string[] args) => runWithTimeout(args, 2.seconds));
+    }
+
+    /**
+     * Params:
+     *  command = The command listing the sessions, the shell pids are appended to it
+     *  run     = Runs a command and returns its output, tests replace it
+     */
+    this(string[] command, string delegate(string[] args) run) {
+        this.command = command;
+        this.run = run;
+    }
+
+    ProcStat[] snapshot(const pid_t[] shells) {
+        if (shells.length == 0) return [];
+        string output = run(command ~ shells.map!(pid => to!string(pid)).array);
+        ProcStat[] result;
+        foreach (line; output.lineSplitter) {
+            // ProcFsSource skips processes whose stat isn't valid UTF-8, do the same
+            try {
+                validate(line);
+            } catch (Exception e) {
+                continue;
+            }
+            Nullable!ProcStat stat = parseStat(line);
+            if (!stat.isNull) result ~= stat.get;
         }
         return result;
     }
@@ -316,29 +508,36 @@ unittest {
 
 // Detecting changes in the active process
 unittest {
-    ProcStat active(pid_t pid, string name) {
+    ProcStat active(pid_t pid, string name, ulong startTime = 1) {
         ProcStat s;
         s.pid = pid;
         s.name = name;
+        s.startTime = startTime;
         return s;
+    }
+    ProcessId seen(pid_t pid, ulong startTime = 1) {
+        return ProcessId(pid, startTime);
     }
 
     // First scan, nothing seen yet
-    auto changes = diffActiveProcesses([100: -1], [100: active(100, "bash")]);
-    assert(changes == [ActiveProcessChange(100, 100, "bash")]);
+    auto changes = diffActiveProcesses([100: ProcessId.init], [100: active(100, "bash")]);
+    assert(changes == [ActiveProcessChange(100, 100, 1, "bash")]);
 
     // No change
-    assert(diffActiveProcesses([100: 100], [100: active(100, "bash")]).length == 0);
+    assert(diffActiveProcesses([100: seen(100)], [100: active(100, "bash")]).length == 0);
 
     // Command started, then back to the idle shell
-    assert(diffActiveProcesses([100: 100], [100: active(200, "vim")]) == [ActiveProcessChange(100, 200, "vim")]);
-    assert(diffActiveProcesses([100: 200], [100: active(100, "bash")]) == [ActiveProcessChange(100, 100, "bash")]);
+    assert(diffActiveProcesses([100: seen(100)], [100: active(200, "vim")]) == [ActiveProcessChange(100, 200, 1, "vim")]);
+    assert(diffActiveProcesses([100: seen(200)], [100: active(100, "bash")]) == [ActiveProcessChange(100, 100, 1, "bash")]);
+
+    // A new command that reuses the previous command's pid is still a change
+    assert(diffActiveProcesses([100: seen(200, 5)], [100: active(200, "less", 9)]) == [ActiveProcessChange(100, 200, 9, "less")]);
 
     // No active process found, i.e. between a command exiting and the next scan
-    assert(diffActiveProcesses([100: 200], null).length == 0);
+    assert(diffActiveProcesses([100: seen(200)], null).length == 0);
 
     // Only watched shells are reported
-    assert(diffActiveProcesses([100: 100], [100: active(100, "bash"), 110: active(201, "top")]).length == 0);
+    assert(diffActiveProcesses([100: seen(100)], [100: active(100, "bash"), 110: active(201, "top")]).length == 0);
 }
 
 // Reading from a proc file system
@@ -349,46 +548,224 @@ unittest {
     mkdirRecurse(root);
     scope(exit) rmdirRecurse(root);
 
-    void writeStat(pid_t pid, string name, pid_t ppid, pid_t pgrp, pid_t session, long tty, pid_t tpgid, ulong start = 1) {
-        mkdirRecurse(buildPath(root, to!string(pid)));
-        std.file.write(buildPath(root, to!string(pid), "stat"),
+    enum TTY1 = 34816;
+    enum TTY2 = 34817;
+
+    // Writes a process's stat and the children file of its main thread
+    void proc(pid_t pid, string name, pid_t ppid, pid_t pgrp, pid_t session, long tty, pid_t tpgid,
+              pid_t[] children = null, ulong start = 1) {
+        string dir = buildPath(root, to!string(pid));
+        mkdirRecurse(buildPath(dir, "task", to!string(pid)));
+        std.file.write(buildPath(dir, "stat"),
             format("%d (%s) S %d %d %d %d %d 0 0 0 0 0 0 0 0 0 20 0 1 0 %d 0 0\n", pid, name, ppid, pgrp, session, tty, tpgid, start));
+        std.file.write(buildPath(dir, "task", to!string(pid), "children"), children.map!(c => to!string(c) ~ " ").join);
     }
 
-    writeStat(1, "systemd", 0, 1, 1, 0, -1);
-    writeStat(100, "bash", 1, 100, 100, 34816, 100);
-    writeStat(110, "zsh", 1, 110, 110, 34817, 110);
-    // Not processes, or not readable as one
-    mkdirRecurse(buildPath(root, "self"));
-    mkdirRecurse(buildPath(root, "999"));
-    mkdirRecurse(buildPath(root, "998"));
-    std.file.write(buildPath(root, "998", "stat"), "garbage");
+    // Writes the children file of another thread of a process
+    void thread(pid_t pid, pid_t tid, pid_t[] children) {
+        string dir = buildPath(root, to!string(pid), "task", to!string(tid));
+        mkdirRecurse(dir);
+        std.file.write(buildPath(dir, "children"), children.map!(c => to!string(c) ~ " ").join);
+    }
 
-    ProcFsSource source = new ProcFsSource(root);
+    // Records which processes are read
+    class CountingSource: ProcFsSource {
+        pid_t[] reads;
+        this(string root) { super(root); }
+        override Nullable!ProcStat read(pid_t pid) {
+            reads ~= pid;
+            return super.read(pid);
+        }
+    }
 
-    // Only the processes in the requested sessions
-    ProcStat[] stats = source.snapshot([100]);
-    assert(stats.length == 1 && stats[0].name == "bash");
-    assert(source.snapshot([100, 110]).length == 2);
+    // Other processes on the system, none of them are read
+    proc(1, "systemd", 0, 1, 1, 0, -1, [100, 110, 120, 500]);
+    proc(500, "firefox", 1, 500, 500, 0, -1, [501]);
+    proc(501, "firefox", 500, 500, 500, 0, -1);
+    // Two terminals, the first idle and the second running top
+    proc(100, "bash", 1, 100, 100, TTY1, 100);
+    proc(110, "zsh", 1, 110, 110, TTY2, 201, [201]);
+    proc(201, "top", 110, 201, 110, TTY2, 201);
+
+    CountingSource source = new CountingSource(root);
+    auto active = activeProcesses(source.snapshot([100]));
+    assert(active[100].name == "bash");
+    assert(source.reads == [100], "Only the shell of an idle terminal is read");
+
+    source.reads = null;
+    active = activeProcesses(source.snapshot([100, 110]));
+    assert(active[100].name == "bash" && active[110].name == "top");
+    assert(source.reads.sort.release == [100, 110, 201]);
     assert(source.snapshot([]).length == 0);
 
-    // A command starts in the first terminal
-    writeStat(100, "bash", 1, 100, 100, 34816, 200);
-    writeStat(200, "bash", 100, 200, 100, 34816, 200);
-    assert(activeProcesses(source.snapshot([100]))[100].name == "bash");
-    // It execs, processes with a terminal are re-read so the new name is seen
-    // rather than the name from before the exec
-    writeStat(200, "vim", 100, 200, 100, 34816, 200);
-    auto active = activeProcesses(source.snapshot([100]));
-    assert(active[100].name == "vim" && active[100].pid == 200);
+    // A pipeline in the first terminal, the last process in it
+    proc(100, "bash", 1, 100, 100, TTY1, 300, [300, 301]);
+    proc(300, "cat", 100, 300, 100, TTY1, 300);
+    proc(301, "less", 100, 300, 100, TTY1, 300);
+    assert(activeProcesses(source.snapshot([100]))[100].name == "less");
 
-    // It exits, the idle shell is active again
-    rmdirRecurse(buildPath(root, "200"));
-    writeStat(100, "bash", 1, 100, 100, 34816, 100);
+    // A command that started others is found through several levels
+    proc(100, "bash", 1, 100, 100, TTY1, 410, [410]);
+    proc(410, "make", 100, 410, 100, TTY1, 410, [401]);
+    proc(401, "gcc", 410, 410, 100, TTY1, 410, [403]);
+    proc(403, "cc1", 401, 410, 100, TTY1, 410);
+    assert(activeProcesses(source.snapshot([100]))[100].name == "cc1");
+
+    // A child started by another thread of a process is found
+    proc(410, "make", 100, 410, 100, TTY1, 410, []);
+    thread(410, 412, [401]);
+    assert(activeProcesses(source.snapshot([100]))[100].name == "cc1");
+
+    // A background job while the shell is idle
+    proc(100, "bash", 1, 100, 100, TTY1, 100, [600]);
+    proc(600, "sleep", 100, 600, 100, TTY1, 100);
+    assert(activeProcesses(source.snapshot([100]))[100].name == "bash");
+
+    // A shell without job control runs commands in its own process group, so
+    // the command is in the foreground along with the shell
+    proc(1, "systemd", 0, 1, 1, 0, -1, [100, 110, 120, 500]);
+    proc(120, "sh", 1, 120, 120, TTY1 + 2, 120, [121]);
+    proc(121, "sleep", 120, 120, 120, TTY1 + 2, 120);
+    assert(activeProcesses(source.snapshot([120]))[120].name == "sleep");
+
+    // Children in their own session, i.e. a new terminal, and their descendants
+    // aren't part of the terminal. A listed child that exited is skipped.
+    proc(100, "bash", 1, 100, 100, TTY1, 100, [130, 999]);
+    proc(130, "tilix", 100, 130, 130, 0, -1, [131]);
+    proc(131, "bash", 130, 131, 131, TTY1 + 3, 131);
+    source.reads = null;
     active = activeProcesses(source.snapshot([100]));
     assert(active[100].name == "bash" && active[100].pid == 100);
-    assert(200 !in source.cache);
+    assert(!source.reads.canFind(131));
 
+    // Stats are read fresh, so a name changed by exec is seen straight away
+    proc(100, "bash", 1, 100, 100, TTY1, 700, [700]);
+    proc(700, "bash", 100, 700, 100, TTY1, 700);
+    assert(activeProcesses(source.snapshot([100]))[100].name == "bash");
+    proc(700, "vim", 100, 700, 100, TTY1, 700);
+    assert(activeProcesses(source.snapshot([100]))[100].name == "vim");
+
+    // A shell that exited gives nothing
+    assert(source.snapshot([800]).length == 0);
     // A missing root is not an error
     assert(new ProcFsSource(buildPath(root, "missing")).snapshot([100]).length == 0);
+
+    // Without the children files every process is read to find those in the session.
+    // Remove the processes from the earlier commands first, they have exited.
+    foreach (pid; [300, 301, 401, 403, 410]) {
+        rmdirRecurse(buildPath(root, to!string(pid)));
+    }
+    foreach (entry; dirEntries(root, "children", SpanMode.depth).array) {
+        std.file.remove(entry.name);
+    }
+    source.reads = null;
+    active = activeProcesses(source.snapshot([100, 110, 120]));
+    assert(active[100].name == "vim" && active[110].name == "top" && active[120].name == "sleep");
+    assert(source.reads.canFind(500), "The fallback reads every process");
+}
+
+// Reading stats through the Flatpak toolbox output
+unittest {
+    string[][] calls;
+    string output;
+    string fakeRun(string[] args) {
+        calls ~= args;
+        return output;
+    }
+
+    FlatpakHostSource source = new FlatpakHostSource(["flatpak-spawn", "--host", "/app/bin/tilix-flatpak-toolbox", "list-sessions"], &fakeRun);
+
+    // Nothing to watch, nothing is run
+    assert(source.snapshot([]).length == 0);
+    assert(calls.length == 0);
+
+    output = "100 (bash) S 1 100 100 34816 300 0 0 0 0 0 0 0 0 0 20 0 1 0 7 0 0\n" ~
+             "300 (vim) S 100 300 100 34816 300 0 0 0 0 0 0 0 0 0 20 0 1 0 9 0 0\n" ~
+             "garbage\n" ~
+             "301 (\xff\xfe) S 100 300 100 34816 300 0 0 0 0 0 0 0 0 0 20 0 1 0 9 0 0\n" ~
+             "\n";
+    ProcStat[] stats = source.snapshot([100, 110]);
+    assert(calls == [["flatpak-spawn", "--host", "/app/bin/tilix-flatpak-toolbox", "list-sessions", "100", "110"]]);
+    // The garbage line and the one that isn't valid UTF-8 are skipped
+    assert(stats.map!(s => s.name).array == ["bash", "vim"]);
+    assert(activeProcesses(stats)[100].name == "vim");
+}
+
+// Running commands with a time limit
+unittest {
+    import core.time : msecs;
+    import std.datetime.stopwatch : AutoStart, StopWatch;
+    import std.exception : assertThrown;
+
+    assert(runWithTimeout(["sh", "-c", "printf 'one\\ntwo\\n'"], 5.seconds) == "one\ntwo\n");
+    assert(runWithTimeout(["true"], 5.seconds) == "");
+    // More output than a pipe holds is read while the command runs
+    assert(runWithTimeout(["sh", "-c", "yes 0123456789 | head -n 100000"], 10.seconds).length == 1_100_000);
+    // A failing or missing command throws
+    assertThrown(runWithTimeout(["sh", "-c", "exit 3"], 5.seconds));
+    assertThrown(runWithTimeout(["/nonexistent/command"], 5.seconds));
+    // A command that takes too long is killed rather than waited for
+    auto sw = StopWatch(AutoStart.yes);
+    assertThrown(runWithTimeout(["sleep", "10"], 300.msecs));
+    assert(sw.peek() < 5.seconds);
+}
+
+// The Flatpak toolbox finds the same processes as ProcFsSource. meson builds the
+// toolbox and passes its path in TILIX_TOOLBOX when a C compiler is available.
+unittest {
+    import core.thread : Thread;
+    import core.time : msecs;
+    import std.process : environment, Pid, Redirect, pipeProcess, kill, wait;
+    import std.range : walkLength;
+
+    string toolbox = environment.get("TILIX_TOOLBOX");
+    if (toolbox.length == 0) return;
+
+    // Terminal sessions running a command, a pipeline, a shell without job control and
+    // an idle shell, if script is available to create them
+    Pid[] sessions;
+    // script waits a moment for its shell after being signalled, so signal them all
+    // before waiting for any
+    scope(exit) {
+        foreach (pid; sessions) kill(pid);
+        foreach (pid; sessions) wait(pid);
+    }
+    if (exists("/usr/bin/script")) {
+        foreach (command; ["sleep 30", "sleep 30 | cat", "sh -c 'sh -c \"sleep 30\"'", "bash --norc"]) {
+            sessions ~= pipeProcess(["/usr/bin/script", "-qfc", command, "/dev/null"], Redirect.all).pid;
+        }
+        Thread.sleep(500.msecs);
+    }
+
+    // Shells as Tilix would watch them: session leaders with a terminal
+    pid_t[] shells;
+    foreach (entry; dirEntries("/proc", SpanMode.shallow)) {
+        if (!baseName(entry.name).isNumeric) continue;
+        try {
+            auto stat = parseStat(readText(buildPath(entry.name, "stat")));
+            if (!stat.isNull && stat.get.ttyNr > 0 && stat.get.session == stat.get.pid) shells ~= stat.get.pid;
+        } catch (Exception e) {}
+    }
+
+    string[string] describe(ProcStat[pid_t] active) {
+        string[string] result;
+        foreach (shell, stat; active) result[to!string(shell)] = stat.name ~ "/" ~ to!string(stat.pid);
+        return result;
+    }
+
+    ProcFsSource proc = new ProcFsSource();
+    FlatpakHostSource host = new FlatpakHostSource([toolbox, "list-sessions"], (string[] args) => runWithTimeout(args, 5.seconds));
+    // Processes can change between the two reads, so allow a few attempts
+    string[string] expected, actual;
+    foreach (attempt; 0 .. 5) {
+        expected = describe(activeProcesses(proc.snapshot(shells)));
+        actual = describe(activeProcesses(host.snapshot(shells)));
+        if (expected == actual) break;
+        Thread.sleep(100.msecs);
+    }
+    assert(expected == actual, format("ProcFsSource %s, toolbox %s", expected, actual));
+    if (sessions.length > 0) {
+        // The sessions created above were found
+        assert(expected.byValue.filter!(v => v.startsWith("sleep/")).walkLength >= 2, format("%s", expected));
+    }
 }
