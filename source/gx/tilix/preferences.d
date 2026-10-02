@@ -148,6 +148,12 @@ enum SETTINGS_QUAKE_WINDOW_POSITION_KEY = "quake-window-position";
 enum SETTINGS_ADVANCED_PASTE_REPLACE_TABS_KEY = "advanced-paste-replace-tabs";
 enum SETTINGS_ADVANCED_PASTE_SPACE_COUNT_KEY = "advanced-paste-space-count";
 enum SETTINGS_ADVANCED_PASTE_REPLACE_CRLF_KEY = "advanced-paste-replace-crlf";
+enum SETTINGS_ADVANCED_PASTE_REPLACE_NEWLINES_KEY = "advanced-paste-replace-newlines";
+enum SETTINGS_ADVANCED_PASTE_LINE_DELAY_KEY = "advanced-paste-line-delay";
+enum SETTINGS_RIGHT_CLICK_ACTION_KEY = "right-click-action";
+enum SETTINGS_RIGHT_CLICK_ACTION_MENU_VALUE = "menu";
+enum SETTINGS_RIGHT_CLICK_ACTION_PASTE_VALUE = "paste";
+immutable string[] SETTINGS_RIGHT_CLICK_ACTION_VALUES = [SETTINGS_RIGHT_CLICK_ACTION_MENU_VALUE, SETTINGS_RIGHT_CLICK_ACTION_PASTE_VALUE];
 
 enum SETTINGS_USE_TABS_KEY = "use-tabs";
 enum SETTINGS_TAB_POSITION_KEY = "tab-position";

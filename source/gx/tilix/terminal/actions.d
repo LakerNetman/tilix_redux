@@ -23,6 +23,7 @@ enum ACTION_COPY_AS_HTML = "copy-as-html";
 enum ACTION_PASTE = "paste";
 enum ACTION_PASTE_PRIMARY = "paste-primary";
 enum ACTION_ADVANCED_PASTE = "advanced-paste";
+enum ACTION_PASTE_SINGLE_LINE = "paste-single-line";
 enum ACTION_COPY_LINK = "copy-link";
 enum ACTION_OPEN_LINK = "open-link";
 enum ACTION_SELECT_ALL = "select-all";
