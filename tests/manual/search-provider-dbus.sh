@@ -9,7 +9,10 @@
 #
 # The probe runs twice: as a plain GApplication, and as a windowless GtkApplication like Tilix, which
 # checks that the provider chains onto GTK's own D-Bus registration. The GTK run needs a display and
-# is skipped without one.
+# is skipped without one. The probe owns Tilix's real bus name, which is safe as the bus is private.
+#
+# Then the Cinnamon menu plugin (data/cinnamon/tilix@gexperts.com) is run in cjs against the probe,
+# see cinnamon-search-harness.js. That part is skipped without cjs.
 #
 # Needs ldc2, dbus-run-session, gdbus and GtkD 3.11 found by pkg-config, for example:
 #   PKG_CONFIG_PATH=~/.local/gtkd-3.11/lib/x86_64-linux-gnu/pkgconfig \
@@ -44,6 +47,8 @@ else import gio.Application;
 
 class Host: SearchProviderHost {
     SearchItem[] searchItems() {
+        // Logged so tests can tell whether a search reached the provider
+        File(environment["PROBE_LOG"], "a").writeln("items");
         return [SearchItem("terminal:t1", "vim notes", "Default — ~/docs", "com.gexperts.Tilix", ["vim notes", "/home/me/docs"]),
                 SearchItem("bookmark:b1", "Server", "Bookmark — me@host", "network-server", ["Server", "me@host"])];
     }
@@ -56,7 +61,7 @@ class Host: SearchProviderHost {
 }
 
 int main(string[] args) {
-    auto app = new Application("com.gexperts.TilixSearchTest", GApplicationFlags.FLAGS_NONE);
+    auto app = new Application("com.gexperts.Tilix", GApplicationFlags.FLAGS_NONE);
     installSearchProvider(app.getApplicationStruct(), new Host());
     app.setInactivityTimeout(3000);
     return app.run(args);
@@ -72,7 +77,7 @@ sed -e 's|<standard_session_servicedirs */>||' -e 's|<servicedir>.*</servicedir>
 # Runs inside the private bus, prints one line per check
 cat > "$WORK/calls.sh" <<'EOF'
 call() {
-    gdbus call --session --dest com.gexperts.TilixSearchTest --object-path /com/gexperts/Tilix/SearchProvider \
+    gdbus call --session --dest com.gexperts.Tilix --object-path /com/gexperts/Tilix/SearchProvider \
         --method org.gnome.Shell.SearchProvider2."$@" 2>&1
 }
 echo "initial: $(call GetInitialResultSet "['DOCS']")"
@@ -97,6 +102,16 @@ expect() {
     fi
 }
 
+# Lets the private bus start the probe of the given kind, logging to the given file
+write_service() {
+    rm -rf "$WORK/services" && mkdir "$WORK/services"
+    cat > "$WORK/services/com.gexperts.Tilix.service" <<EOF
+[D-BUS Service]
+Name=com.gexperts.Tilix
+Exec=/usr/bin/env PROBE_LOG=$2 $WORK/probe-$1 --gapplication-service
+EOF
+}
+
 run_probe() {
     local kind=$1 version=$2
     echo "== $kind"
@@ -108,12 +123,7 @@ run_probe() {
         return
     fi
     local log="$WORK/probe-$kind.log"
-    rm -rf "$WORK/services" && mkdir "$WORK/services"
-    cat > "$WORK/services/com.gexperts.TilixSearchTest.service" <<EOF
-[D-BUS Service]
-Name=com.gexperts.TilixSearchTest
-Exec=/usr/bin/env PROBE_LOG=$log $WORK/probe-$kind --gapplication-service
-EOF
+    write_service "$kind" "$log"
     local out failed_before=$FAIL
     out=$(timeout 60 dbus-run-session --config-file="$WORK/session.conf" -- bash "$WORK/calls.sh" 2>/dev/null)
     local log_text=""
@@ -144,6 +154,38 @@ if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
 else
     echo "== gtk skipped, no display"
 fi
+
+# The Cinnamon plugin, run in cjs against the plain probe
+run_cinnamon() {
+    echo "== cinnamon menu plugin"
+    if ! command -v cjs >/dev/null; then
+        echo "  skipped, no cjs"
+        return
+    fi
+    if [ ! -x "$WORK/probe-gio" ]; then
+        FAIL=$((FAIL + 1))
+        echo "  FAIL no probe, its build failed above"
+        return
+    fi
+    local log="$WORK/probe-cinnamon.log" out ok bad
+    write_service gio "$log"
+    out=$(timeout 60 dbus-run-session --config-file="$WORK/session.conf" -- \
+        cjs "$ROOT/tests/manual/cinnamon-search-harness.js" \
+        "$ROOT/data/cinnamon/tilix@gexperts.com/search_provider.js" "$log" 2>&1)
+    printf '%s\n' "$out" | grep -E '^  (ok|FAIL) '
+    ok=$(printf '%s\n' "$out" | grep -c '^  ok ')
+    bad=$(printf '%s\n' "$out" | grep -c '^  FAIL ')
+    PASS=$((PASS + ok))
+    FAIL=$((FAIL + bad))
+    # The harness prints a summary line last, without it cjs failed before finishing
+    if ! printf '%s\n' "$out" | grep -q '^cinnamon failures: '; then
+        FAIL=$((FAIL + 1))
+        echo "  FAIL harness did not finish:"
+        printf '%s\n' "$out" | sed 's/^/     /' | tail -15
+    fi
+}
+
+run_cinnamon
 
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

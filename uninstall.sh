@@ -29,6 +29,7 @@ find "${PREFIX}/share/icons/hicolor" -type f -name "com.gexperts.Tilix*.svg" -de
 rm -f "${PREFIX}/share/nautilus-python/extensions/open-tilix.py"
 rm -f "${PREFIX}/share/dbus-1/services/com.gexperts.Tilix.service"
 rm -f "${PREFIX}/share/gnome-shell/search-providers/com.gexperts.Tilix.search-provider.ini"
+rm -rf "${PREFIX}/share/cinnamon/search_providers/tilix@gexperts.com"
 rm -f "${PREFIX}/share/applications/com.gexperts.Tilix.desktop"
 rm -f "${PREFIX}/share/metainfo/com.gexperts.Tilix.appdata.xml"
 rm -f "${PREFIX}/share/man/man1/tilix.1.gz"
