@@ -192,6 +192,16 @@
       <summary>Whether to automatically hide the mouse pointer when typing</summary>
       <description>If true, the mouse pointer is hidden when the user starts typing and shown again when interaction with the mouse occurs.</description>
     </key>
+    <key name="file-links" type="b">
+      <default>true</default>
+      <summary>Whether file paths in the terminal can be clicked</summary>
+      <description>If true, file paths such as ./src/app.py:68 can be opened with Ctrl+click, using file-link-command or the default application.</description>
+    </key>
+    <key name="file-link-command" type="s">
+      <default>''</default>
+      <summary>Command to open clicked file paths</summary>
+      <description>Command run to open a clicked file path, where ${file} is the absolute path and ${line} and ${column} the position after it, 1 when not given. Empty opens the file with its default application.</description>
+    </key>
     <key name="prompt-on-new-session" type="b">
       <default>false</default>
       <summary>Whether to prompt for session settings or use defaults</summary>

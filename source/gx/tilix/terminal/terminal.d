@@ -2068,6 +2068,9 @@ private:
                 }
             }
             break;
+        case TerminalURLFlavor.FILE_PATH:
+            openFileLink(urlMatch.match);
+            return;
         case TerminalURLFlavor.CUSTOM:
             // TODO - Optimize this by caching compiled regex
             // Also I'm mixing GRegex which is used to detect initial click
@@ -2091,7 +2094,9 @@ private:
                             // The link text and variables such as the title are untrusted
                             ShellCommand sc = prepareShellCommand(tr.command, groups, getVariables(tr.command));
                             trace("Command: " ~ sc.command);
-                            spawnShell(sc.command, sc.env, Config.none, currentLocalDirectory);
+                            // Without shell integration no directory is reported, which ran
+                            // the command in the home directory and broke relative paths (#2068)
+                            spawnShell(sc.command, sc.env, Config.none, linkWorkingDirectory());
                         }
                     }
                 } catch (GException ge) {
@@ -2111,6 +2116,50 @@ private:
         } catch (Exception e) {
             string message = format(_("Could not open match '%s'"), match.match);
             showErrorDialog(cast(Window)getToplevel(), message, _("Error Opening Match"));
+            error(message);
+            error(e.msg);
+        }
+    }
+
+    /**
+     * The directory commands started from links run in: the one the shell
+     * reports, otherwise the shell's own working directory or the directory the
+     * terminal started in. Null if none is known.
+     */
+    string linkWorkingDirectory() {
+        // In a Flatpak the shell's pid is a host pid, the sandbox's /proc would show another process
+        return terminalLocalDirectory(gst.currentLocalDirectory, isFlatpak() ? 0 : gpid, gst.initialCWD);
+    }
+
+    /**
+     * Opens a clicked file path, with file-link-command or the default
+     * application. Relative paths are relative to the terminal's directory, and
+     * only files that exist are opened.
+     */
+    void openFileLink(string text) {
+        FileLink link = parseFileLink(text);
+        string directory = linkWorkingDirectory();
+        string path = resolveFileLinkPath(link.path, directory, Util.getHomeDir());
+        import std.file : exists;
+        if (path.length == 0 || !exists(path)) {
+            showInfoBarMessage(format(_("No file '%s' was found"), link.path));
+            return;
+        }
+        string command = gsSettings.getString(SETTINGS_FILE_LINK_COMMAND_KEY);
+        try {
+            if (command.length == 0) {
+                MountOperation.showUri(null, URI.filenameToUri(path, null), Main.getCurrentEventTime());
+            } else {
+                // The path comes from terminal output, so it is passed to the shell as a variable
+                string[string] variables = ["${file}": path,
+                    "${line}": link.line.length > 0 ? link.line : "1",
+                    "${column}": link.column.length > 0 ? link.column : "1"];
+                ShellCommand sc = prepareShellCommand(command, null, variables);
+                spawnShell(sc.command, sc.env, Config.none, directory);
+            }
+        } catch (Exception e) {
+            string message = format(_("Could not open '%s'"), path);
+            showErrorDialog(cast(Window)getToplevel(), message ~ "\n" ~ e.msg, _("Error Opening File"));
             error(message);
             error(e.msg);
         }
@@ -2422,7 +2471,7 @@ private:
         case SETTINGS_TERMINAL_TITLE_SHOW_WHEN_SINGLE_KEY:
             updateTitleBar();
             break;
-        case SETTINGS_ALL_CUSTOM_HYPERLINK_KEY:
+        case SETTINGS_ALL_CUSTOM_HYPERLINK_KEY, SETTINGS_FILE_LINKS_KEY:
             loadRegex();
             break;
         case SETTINGS_ALL_TRIGGERS_KEY:
@@ -2606,6 +2655,12 @@ private:
             foreach (i, regex; compiledVRegex) {
                 int id = vte.matchAddRegex(cast(VRegex) regex, 0);
                 regexTag[id] = URL_REGEX_PATTERNS[i];
+                vte.matchSetCursorType(id, CursorType.HAND2);
+            }
+            // File paths last, so custom links and URLs take precedence
+            if (gsSettings.getBoolean(SETTINGS_FILE_LINKS_KEY)) {
+                int id = vte.matchAddRegex(compileVRegex(FILE_PATH_REGEX), 0);
+                regexTag[id] = FILE_PATH_REGEX;
                 vte.matchSetCursorType(id, CursorType.HAND2);
             }
         } catch (GException e) {

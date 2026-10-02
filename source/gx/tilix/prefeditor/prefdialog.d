@@ -1661,6 +1661,38 @@ private:
         uint row = 0;
         createAdvancedUI(grid, row, &getSettings);
 
+        // File paths, application wide so not part of the UI shared with profiles
+        Label lblFileLinks = new Label(format("<b>%s</b>", _("File Paths")));
+        lblFileLinks.setUseMarkup(true);
+        lblFileLinks.setHalign(GtkAlign.START);
+        lblFileLinks.setMarginTop(12);
+        grid.attach(lblFileLinks, 0, row, 3, 1);
+        row++;
+
+        CheckButton cbFileLinks = new CheckButton(_("Open file paths with Ctrl+click"));
+        gsSettings.bind(SETTINGS_FILE_LINKS_KEY, cbFileLinks, "active", GSettingsBindFlags.DEFAULT);
+        grid.attach(cbFileLinks, 0, row, 3, 1);
+        row++;
+
+        Label lblFileCommand = new Label(_("Open with"));
+        lblFileCommand.setHalign(GtkAlign.END);
+        grid.attach(lblFileCommand, 0, row, 1, 1);
+        Entry eFileCommand = new Entry();
+        eFileCommand.setHexpand(true);
+        eFileCommand.setPlaceholderText(_("Default application"));
+        eFileCommand.setTooltipText(_("For example: code --goto ${file}:${line}:${column}"));
+        gsSettings.bind(SETTINGS_FILE_LINK_COMMAND_KEY, eFileCommand, "text", GSettingsBindFlags.DEFAULT);
+        gsSettings.bind(SETTINGS_FILE_LINKS_KEY, eFileCommand, "sensitive", GSettingsBindFlags.GET);
+        grid.attach(eFileCommand, 1, row, 2, 1);
+        row++;
+
+        Label lblFileHelp = new Label(_("Paths such as ./src/app.py:68 can be opened in an editor. ${file} is the file, ${line} and ${column} the position after it. Leave empty to use the default application."));
+        lblFileHelp.setLineWrap(true);
+        lblFileHelp.setXalign(0);
+        lblFileHelp.setSensitive(false);
+        grid.attach(lblFileHelp, 0, row, 3, 1);
+        row++;
+
         this.add(grid);
     }
 
