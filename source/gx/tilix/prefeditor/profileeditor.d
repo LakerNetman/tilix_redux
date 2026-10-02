@@ -205,6 +205,7 @@ private:
 
     Label lblId;
     ProfileEditor pe;
+    ColorButton cbBorderColor;
 
 protected:
     void createUI() {
@@ -353,6 +354,40 @@ protected:
             row++;
         }
 
+        //Padding between the text and the edges of the terminal
+        Label lblPadding = new Label(_("Padding"));
+        lblPadding.setHalign(GtkAlign.END);
+        grid.attach(lblPadding, 0, row, 1, 1);
+        SpinButton sbPadding = new SpinButton(0, 64, 1);
+        sbPadding.setTooltipText(_("Space in pixels between the text and the edges of the terminal"));
+        bh.bind(SETTINGS_PROFILE_PADDING_KEY, sbPadding, "value", GSettingsBindFlags.DEFAULT);
+        sbPadding.setHalign(GtkAlign.START);
+        grid.attach(sbPadding, 1, row, 1, 1);
+        row++;
+
+        //Border around the terminal and its title bar
+        Label lblBorder = new Label(_("Border"));
+        lblBorder.setHalign(GtkAlign.END);
+        grid.attach(lblBorder, 0, row, 1, 1);
+        Box bBorder = new Box(Orientation.HORIZONTAL, 6);
+        SpinButton sbBorder = new SpinButton(0, 16, 1);
+        sbBorder.setTooltipText(_("Width in pixels of a border around the terminal, 0 for none"));
+        bh.bind(SETTINGS_PROFILE_BORDER_WIDTH_KEY, sbBorder, "value", GSettingsBindFlags.DEFAULT);
+        bBorder.add(sbBorder);
+        // The color is loaded in bind() since the page is reused for each profile
+        cbBorderColor = new ColorButton();
+        cbBorderColor.setTitle(_("Border color"));
+        cbBorderColor.setTooltipText(_("Border color"));
+        cbBorderColor.addOnColorSet(delegate(ColorButton cb) {
+            if (gsProfile is null) return;
+            RGBA color;
+            cb.getRgba(color);
+            gsProfile.setString(SETTINGS_PROFILE_BORDER_COLOR_KEY, rgbaTo16bitHex(color, false, true));
+        });
+        bBorder.add(cbBorderColor);
+        grid.attach(bBorder, 1, row, 1, 1);
+        row++;
+
         if (checkVTEVersion(VTE_VERSION_TEXT_BLINK_MODE)) {
             //Text Blink Mode
             Label lblTextBlinkMode = new Label(_("Text blink mode"));
@@ -463,6 +498,10 @@ public:
     override void bind(ProfileInfo profile, GSettings gsProfile) {
         super.bind(profile, gsProfile);
         lblId.setText(format(_("ID: %s"), profile.uuid));
+        RGBA borderColor = new RGBA();
+        if (borderColor.parse(gsProfile.getString(SETTINGS_PROFILE_BORDER_COLOR_KEY))) {
+            cbBorderColor.setRgba(borderColor);
+        }
     }
 
     override void unbind() {

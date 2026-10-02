@@ -81,3 +81,34 @@ unittest {
     // Output moving forward
     assert(!isScrollbackCleared(1100, 1000, 24));
 }
+
+/**
+ * Returns the CSS giving the VTE widget the padding, or null for none
+ */
+string paddingCss(int padding) {
+    import std.format : format;
+
+    if (padding <= 0) return null;
+    return format("vte-terminal { padding: %dpx; }", padding > 64 ? 64 : padding);
+}
+
+/// Limits a border width to the range the profile setting allows
+int clampBorderWidth(int width) {
+    if (width < 0) return 0;
+    return width > 16 ? 16 : width;
+}
+
+unittest {
+    assert(paddingCss(8) == "vte-terminal { padding: 8px; }");
+    assert(paddingCss(1) == "vte-terminal { padding: 1px; }");
+    // None, so padding from gtk.css or the theme still applies
+    assert(paddingCss(0) is null);
+    assert(paddingCss(-3) is null);
+    // Beyond the setting's range, i.e. edited directly in dconf
+    assert(paddingCss(500) == "vte-terminal { padding: 64px; }");
+
+    assert(clampBorderWidth(2) == 2);
+    assert(clampBorderWidth(0) == 0);
+    assert(clampBorderWidth(-1) == 0);
+    assert(clampBorderWidth(100) == 16);
+}
