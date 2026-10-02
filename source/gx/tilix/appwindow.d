@@ -145,6 +145,7 @@ private:
     enum ACTION_SESSION_SYNC_INPUT = "synchronize-input";
     enum ACTION_WIN_SESSION_X = "switch-to-session-";
     enum ACTION_WIN_SIDEBAR = "view-sidebar";
+    enum ACTION_WIN_NEW_SESSION_PROFILE = "new-session-profile";
     enum ACTION_WIN_SESSIONSWITCHER = "view-session-switcher";
     enum ACTION_WIN_NEXT_SESSION = "switch-to-next-session";
     enum ACTION_WIN_PREVIOUS_SESSION = "switch-to-previous-session";
@@ -167,6 +168,9 @@ private:
 
     SimpleActionGroup sessionActions;
     MenuButton mbSessionActions;
+    // Profiles to start a new session with, shared by the new session dropdown and
+    // the window menu, refilled whenever either opens so it follows profile changes
+    GMenu profileSessionMenu;
     SimpleAction saSyncInput;
     SimpleAction saViewSideBar;
     SimpleAction saSessionAddRight;
@@ -330,6 +334,16 @@ private:
         });
         btnNew.setTooltipText(_("Create a new session"));
 
+        // Dropdown to start a new session with a chosen profile, i.e. one with a custom command
+        profileSessionMenu = new GMenu();
+        updateProfileSessionMenu();
+        MenuButton mbNewProfile = new MenuButton();
+        mbNewProfile.add(new Image("pan-down-symbolic", IconSize.MENU));
+        mbNewProfile.setFocusOnClick(false);
+        mbNewProfile.setTooltipText(_("Create a new session with a profile"));
+        mbNewProfile.setMenuModel(profileSessionMenu);
+        mbNewProfile.addOnToggled(delegate(ToggleButton) { updateProfileSessionMenu(); });
+
         Box bSessionButtons;
 
         if (!useTabs) {
@@ -365,6 +379,12 @@ private:
             btnNew.getStyleContext().addClass("session-new-button");
             bSessionButtons.packStart(tbSideBar, false, false, 0);
             bSessionButtons.packStart(btnNew, false, false, 0);
+            bSessionButtons.packStart(mbNewProfile, false, false, 0);
+        } else {
+            bSessionButtons = new Box(Orientation.HORIZONTAL, 0);
+            bSessionButtons.getStyleContext().addClass("linked");
+            bSessionButtons.packStart(btnNew, false, false, 0);
+            bSessionButtons.packStart(mbNewProfile, false, false, 0);
         }
 
         //Session Actions
@@ -373,6 +393,7 @@ private:
         Image iHamburger = new Image("open-menu-symbolic", IconSize.MENU);
         mbSessionActions.add(iHamburger);
         mbSessionActions.setPopover(createPopover(mbSessionActions));
+        mbSessionActions.addOnToggled(delegate(ToggleButton) { updateProfileSessionMenu(); });
 
         Button btnAddHorizontal = new Button("tilix-add-horizontal-symbolic", IconSize.MENU);
         btnAddHorizontal.setDetailedActionName(getActionDetailedName(ACTION_PREFIX, ACTION_SESSION_ADD_RIGHT));
@@ -400,11 +421,7 @@ private:
         if (!isCSDDisabled()) {
             header.setCustomTitle(createCustomTitle());
         }
-        if (useTabs) {
-            header.packStart(btnNew);
-        } else {
-            header.packStart(bSessionButtons);
-        }
+        header.packStart(bSessionButtons);
         header.packStart(btnAddHorizontal);
         header.packStart(btnAddVertical);
         header.packEnd(mbSessionActions);
@@ -465,6 +482,12 @@ private:
                 }
             });
         }
+
+        // Start a new session with the profile whose uuid is the parameter
+        registerAction(this, "win", ACTION_WIN_NEW_SESSION_PROFILE, null, delegate(GVariant value, SimpleAction) {
+            size_t length;
+            createSessionWithProfile(value.getString(length));
+        }, new GVariantType("s"));
 
         registerActionWithSettings(this, "win", ACTION_WIN_NEXT_SESSION, gsShortcuts, delegate(GVariant, SimpleAction) {
             focusNextSession();
@@ -690,6 +713,12 @@ private:
 
         GMenu mWindowSection = new GMenu();
         mWindowSection.appendItem(new GMenuItem(_("New Window"), getActionDetailedName(ACTION_PREFIX_APP, ACTION_NEW_WINDOW)));
+        // Also here since the new session dropdown is hidden with the header bar in some window styles
+        if (profileSessionMenu is null) {
+            profileSessionMenu = new GMenu();
+            updateProfileSessionMenu();
+        }
+        mWindowSection.appendSubmenu(_("New Session"), profileSessionMenu);
         model.appendSection(null, mWindowSection);
 
         GMenu mFileSection = new GMenu();
@@ -779,12 +808,14 @@ private:
     }
 
     void addSession(Session session) {
+        int position = newSessionPosition(gsSettings.getBoolean(SETTINGS_NEW_SESSION_AFTER_CURRENT_KEY),
+            nb.getNPages(), nb.getCurrentPage());
         int index;
         if (!useTabs) {
-            index = nb.appendPage(session, session.name);
+            index = nb.insertPage(session, new Label(session.name), position);
         } else {
             SessionTabLabel label = new SessionTabLabel(nb.getTabPos, session.displayName, session);
-            index = nb.appendPage(session, label);
+            index = nb.insertPage(session, label, position);
         }
         nb.showAll();
         nb.setCurrentPage(index);
@@ -2048,6 +2079,39 @@ public:
     }
 
     /**
+     * Refills the menu of profiles to start a new session with
+     */
+    void updateProfileSessionMenu() {
+        if (profileSessionMenu is null) return;
+        profileSessionMenu.removeAll();
+        foreach (profile; prfMgr.getProfiles()) {
+            GMenuItem item = new GMenuItem(escapeMnemonic(profile.name), null);
+            item.setActionAndTargetValue(getActionDetailedName("win", ACTION_WIN_NEW_SESSION_PROFILE), new GVariant(profile.uuid));
+            profileSessionMenu.appendItem(item);
+        }
+    }
+
+    /**
+     * Creates a new session with the given profile, in the current terminal's
+     * directory like a new session from the new session button. Unlike switching
+     * a terminal's profile this runs the profile's custom command, if it has one.
+     */
+    void createSessionWithProfile(string profileUUID) {
+        if (!useTabs && sb.getRevealChild()) {
+            saViewSideBar.activate(null);
+        }
+        if (!prfMgr.getProfileUUIDs().canFind(profileUUID)) {
+            profileUUID = prfMgr.getDefaultProfile();
+        }
+        string workingDir;
+        if (tilix.getGlobalOverrides().cwd.length == 0 && tilix.getGlobalOverrides().workingDir.length == 0) {
+            ITerminal terminal = getActiveTerminal();
+            if (terminal !is null) workingDir = terminal.currentLocalDirectory;
+        }
+        createSession(gsSettings.getString(SETTINGS_SESSION_NAME_KEY), profileUUID, workingDir);
+    }
+
+    /**
      * Creates a new session and prompts the user for session properties
      */
     void createSession() {
@@ -2385,4 +2449,35 @@ public:
 	 * Event triggered when user clicks the close button
 	 */
     GenericEvent!(Session) onCloseClicked;
+}
+
+/**
+ * Returns where to insert a new session in the notebook, -1 to append it.
+ * With afterCurrent it goes right after the current session.
+ */
+int newSessionPosition(bool afterCurrent, int pageCount, int currentPage) {
+    if (!afterCurrent || pageCount <= 0 || currentPage < 0) return -1;
+    return currentPage + 1;
+}
+
+/**
+ * Escapes a label for a GMenu item so underscores show rather than marking a mnemonic
+ */
+string escapeMnemonic(string label) {
+    import std.array : replace;
+    return label.replace("_", "__");
+}
+
+unittest {
+    // Appended unless the setting is on
+    assert(newSessionPosition(false, 3, 0) == -1);
+    // After the current session
+    assert(newSessionPosition(true, 3, 0) == 1);
+    assert(newSessionPosition(true, 3, 2) == 3);
+    // The first session, or no current page, is appended
+    assert(newSessionPosition(true, 0, -1) == -1);
+    assert(newSessionPosition(true, 2, -1) == -1);
+
+    assert(escapeMnemonic("work_ssh") == "work__ssh");
+    assert(escapeMnemonic("Default") == "Default");
 }

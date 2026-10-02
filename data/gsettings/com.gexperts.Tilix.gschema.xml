@@ -202,6 +202,11 @@
       <summary>Command to open clicked file paths</summary>
       <description>Command run to open a clicked file path, where ${file} is the absolute path and ${line} and ${column} the position after it, 1 when not given. Empty opens the file with its default application.</description>
     </key>
+    <key name="new-session-after-current" type="b">
+      <default>false</default>
+      <summary>Whether new sessions open next to the current one</summary>
+      <description>If true, a new session is placed right after the current session rather than at the end.</description>
+    </key>
     <key name="prompt-on-new-session" type="b">
       <default>false</default>
       <summary>Whether to prompt for session settings or use defaults</summary>
