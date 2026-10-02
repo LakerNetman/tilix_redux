@@ -108,6 +108,8 @@ import gx.tilix.preferences;
 import gx.tilix.session;
 import gx.tilix.sidebar;
 
+import gx.util.file;
+
 /**
  * The GTK Application Window for Tilix. It is responsible for
  * managing sessions which are held as pages in a GTK Notebook. All
@@ -1593,7 +1595,7 @@ private:
                     try {
                         dialogPaths[DialogPath.SAVE_SESSION] = fcd.getCurrentFolder();
                         string json = session.serializeToJSON();
-                        write(filename, json);
+                        writeFileAtomic(filename, json);
                         session.filename = filename;
                         // Only add once saved so a failed save doesn't leave a stale entry
                         addRecentSessionFile(filename);
@@ -1616,7 +1618,8 @@ private:
         else {
             try {
                 string json = session.serializeToJSON();
-                write(session.filename, json);
+                // Written atomically so a failed save never leaves a truncated session file
+                writeFileAtomic(session.filename, json);
             }
             catch (Exception e) {
                 error(e);
