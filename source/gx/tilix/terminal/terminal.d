@@ -1342,7 +1342,34 @@ private:
             path = "";
         }
         variables[VARIABLE_TERMINAL_DIR] = path;
+        variables[VARIABLE_TERMINAL_DIR_NAME] = directoryName(path);
+        // Looking for the repository reads the file system, so only when used
+        if (text.indexOf(VARIABLE_TERMINAL_GIT_REPO) >= 0) {
+            variables[VARIABLE_TERMINAL_GIT_REPO] = gitRepoVariable(path);
+        }
         return variables;
+    }
+
+    // The directory and result of the last git repository lookup
+    string gitRepoCacheDirectory;
+    string gitRepoCacheValue;
+
+    /**
+     * The value of ${gitRepo}: the name of the git repository the directory is in,
+     * or the directory's name when it isn't in one. Remote directories, i.e. over
+     * ssh, can't be looked up so they always give the directory's name. Cached per
+     * directory, so a repository created in the current directory shows once the
+     * directory changes.
+     */
+    string gitRepoVariable(string path) {
+        if (path.length == 0) return "";
+        if (gst.isRemote) return directoryName(path);
+        if (path != gitRepoCacheDirectory) {
+            gitRepoCacheDirectory = path;
+            string repo = findGitRepository(path);
+            gitRepoCacheValue = repo.length > 0 ? repo : directoryName(path);
+        }
+        return gitRepoCacheValue;
     }
 
     /**
@@ -4679,6 +4706,11 @@ public:
 
     @property string currentLocalDirectory() {
         return local.directory;
+    }
+
+    /// Whether the terminal is in a remote session, i.e. over ssh
+    @property bool isRemote() {
+        return remote.hasState();
     }
 
     @property string initialCWD() {

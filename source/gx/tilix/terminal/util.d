@@ -81,3 +81,74 @@ unittest {
     // Output moving forward
     assert(!isScrollbackCleared(1100, 1000, 24));
 }
+
+/**
+ * Returns the last part of a directory path, i.e. "tilix" for "/home/u/src/tilix/".
+ * The root directory gives "/".
+ */
+string directoryName(string path) {
+    import std.path : baseName;
+    import std.string : stripRight;
+
+    if (path.length == 0) return "";
+    string trimmed = path.stripRight("/");
+    if (trimmed.length == 0) return "/";
+    return baseName(trimmed);
+}
+
+/**
+ * Returns the name of the git repository containing the directory, the name of
+ * the directory with a .git entry found by walking up from it, or null if it
+ * isn't in a repository. .git can be a file, as in worktrees and submodules.
+ */
+string findGitRepository(string directory) {
+    import std.path : buildPath, dirName, isAbsolute;
+
+    if (directory.length == 0 || !isAbsolute(directory)) return null;
+    string current = directory;
+    // Deep enough for any real path, and guards against a loop
+    foreach (i; 0 .. 256) {
+        try {
+            if (exists(buildPath(current, ".git"))) return directoryName(current);
+        } catch (Exception e) {
+            // Can't be read, i.e. permissions, keep walking up
+        }
+        string parent = dirName(current);
+        if (parent == current) break;
+        current = parent;
+    }
+    return null;
+}
+
+unittest {
+    import std.path : buildPath;
+
+    assert(directoryName("/home/u/src/tilix") == "tilix");
+    assert(directoryName("/home/u/src/tilix/") == "tilix");
+    assert(directoryName("/home/u/my project") == "my project");
+    assert(directoryName("/") == "/");
+    assert(directoryName("") == "");
+
+    string root = buildPath(tempDir(), "tilix-git-test-" ~ to!string(thisProcessID()));
+    scope(exit) rmdirRecurse(root);
+    // A repository with a .git directory, and a nested directory in it
+    mkdirRecurse(buildPath(root, "projects", "tilix", ".git"));
+    mkdirRecurse(buildPath(root, "projects", "tilix", "source", "gx"));
+    // A worktree, where .git is a file
+    mkdirRecurse(buildPath(root, "projects", "tilix-fixes", "docs"));
+    std.file.write(buildPath(root, "projects", "tilix-fixes", ".git"), "gitdir: ../tilix/.git/worktrees/fixes\n");
+    // Not in a repository
+    mkdirRecurse(buildPath(root, "notes"));
+
+    assert(findGitRepository(buildPath(root, "projects", "tilix")) == "tilix");
+    assert(findGitRepository(buildPath(root, "projects", "tilix", "source", "gx")) == "tilix");
+    assert(findGitRepository(buildPath(root, "projects", "tilix-fixes", "docs")) == "tilix-fixes");
+    // Outside any repository, unless the temporary directory itself is in one
+    if (findGitRepository(tempDir()) is null) {
+        assert(findGitRepository(buildPath(root, "notes")) is null);
+    }
+    // A directory that doesn't exist still checks its parents
+    assert(findGitRepository(buildPath(root, "projects", "tilix", "gone")) == "tilix");
+    assert(findGitRepository("relative/path") is null);
+    assert(findGitRepository("") is null);
+}
