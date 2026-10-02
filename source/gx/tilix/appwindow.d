@@ -1933,6 +1933,26 @@ public:
         addSession(session);
     }
 
+    /**
+     * The sessions in this window
+     */
+    @property Session[] sessions() {
+        return getSessions();
+    }
+
+    /**
+     * Loads a session file as picking it from the recent sessions list does. If
+     * it can't be loaded it's removed from that list and the error is rethrown.
+     */
+    void loadSessionFile(string filename) {
+        try {
+            loadSession(filename);
+        } catch (Exception e) {
+            removeRecentSessionFile(filename);
+            throw e;
+        }
+    }
+
     void closeNoPrompt() {
         _noPrompt = true;
         close();

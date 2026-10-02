@@ -59,6 +59,7 @@ import gtk.Widget;
 import gtk.Window;
 
 import gx.gtk.actions;
+import gx.gtk.dialog : showErrorDialog;
 import gx.gtk.cairo;
 import gx.gtk.resource;
 import gx.gtk.util;
@@ -71,9 +72,12 @@ import gx.tilix.cmdparams;
 import gx.tilix.common;
 import gx.tilix.constants;
 import gx.tilix.preferences;
+import gx.tilix.searchprovider;
+import gx.tilix.session;
 import gx.tilix.shortcuts;
 
 import gx.tilix.bookmark.manager;
+import gx.tilix.terminal.terminal : Terminal;
 
 import gx.tilix.prefeditor.prefdialog;
 
@@ -88,7 +92,7 @@ Tilix tilix;
 /**
  * The GTK Application used by Tilix.
  */
-class Tilix : Application {
+class Tilix : Application, SearchProviderHost {
 
 private:
 
@@ -735,7 +739,141 @@ public:
         this.addOnStartup(&onAppStartup);
         this.addOnShutdown(&onAppShutdown);
         this.addOnCommandLine(&onCommandLine);
+        // Must be before the application registers on the bus, see installSearchProvider
+        installSearchProvider(getApplicationStruct(), this);
         tilix = this;
+    }
+
+    /**
+     * Open terminals, bookmarks and recent session files for the GNOME Shell
+     * search provider
+     */
+    SearchItem[] searchItems() {
+        SearchItem[] items;
+        string home = environment.get("HOME");
+
+        foreach (window; appWindows) {
+            foreach (session; window.sessions) {
+                foreach (terminal; session.getTerminals()) {
+                    string title = stripMarkup(terminal.displayTitle);
+                    if (title.length == 0) title = _("Terminal");
+                    string directory = terminal.currentLocalDirectory;
+                    string description = session.displayName;
+                    if (directory.length > 0) description ~= " — " ~ tildePath(directory, home);
+                    items ~= SearchItem(resultId(ResultKind.TERMINAL, terminal.uuid), title, description,
+                                        APPLICATION_ICON_NAME, [title, directory, session.displayName]);
+                }
+            }
+        }
+
+        void addBookmarks(FolderBookmark folder) {
+            foreach (ref bm; folder) {
+                if (FolderBookmark child = cast(FolderBookmark) bm) {
+                    addBookmarks(child);
+                    continue;
+                }
+                string detail, icon;
+                if (PathBookmark pb = cast(PathBookmark) bm) {
+                    detail = tildePath(pb.path, home);
+                    icon = "folder";
+                } else if (RemoteBookmark rb = cast(RemoteBookmark) bm) {
+                    detail = rb.user.length > 0 ? rb.user ~ "@" ~ rb.host : rb.host;
+                    icon = "network-server";
+                } else if (CommandBookmark cb = cast(CommandBookmark) bm) {
+                    detail = cb.command;
+                    icon = "utilities-terminal";
+                } else {
+                    continue;
+                }
+                items ~= SearchItem(resultId(ResultKind.BOOKMARK, bm.uuid), bm.name, _("Bookmark") ~ " — " ~ detail,
+                                    icon, [bm.name, detail]);
+            }
+        }
+        if (bmMgr !is null) addBookmarks(bmMgr.root);
+
+        if (gsGeneral !is null) {
+            foreach (filename; gsGeneral.getStrv(SETTINGS_RECENT_SESSION_FILES_KEY)) {
+                if (!exists(filename)) continue;
+                string name = baseName(stripExtension(filename));
+                items ~= SearchItem(resultId(ResultKind.SESSION, filename), name, _("Session") ~ " — " ~ tildePath(filename, home),
+                                    "document-open", [name, filename]);
+            }
+        }
+        return items;
+    }
+
+    /**
+     * Switches to the terminal, or opens the bookmark or session in a new window
+     */
+    void activateResult(string id, uint timestamp) {
+        ResultKind kind;
+        string key;
+        if (!parseResultId(id, kind, key)) return;
+        final switch (kind) {
+            case ResultKind.TERMINAL:
+                foreach (window; appWindows) {
+                    if (window.activateTerminal(key)) {
+                        window.presentWithTime(timestamp);
+                        return;
+                    }
+                }
+                // The terminal was closed since the search
+                launchSearch(null, timestamp);
+                return;
+            case ResultKind.BOOKMARK:
+                Bookmark bm = bmMgr.get(key);
+                if (bm is null) return;
+                openBookmarkWindow(bm, timestamp);
+                return;
+            case ResultKind.SESSION:
+                AppWindow window = new AppWindow(this, useTabs);
+                try {
+                    window.loadSessionFile(key);
+                } catch (Exception e) {
+                    error(e);
+                    window.destroy();
+                    showErrorDialog(null, _("Could not load session due to unexpected error.") ~ "\n" ~ e.msg, _("Error Loading Session"));
+                    return;
+                }
+                window.showAll();
+                window.presentWithTime(timestamp);
+                return;
+        }
+    }
+
+    /**
+     * Brings Tilix forward when the search provider itself is picked
+     */
+    void launchSearch(string[] terms, uint timestamp) {
+        AppWindow window = getActiveAppWindow();
+        if (window is null) {
+            createAppWindow();
+            window = getActiveAppWindow();
+        }
+        if (window !is null) window.presentWithTime(timestamp);
+    }
+
+    /**
+     * Opens a new window for a bookmark, a path bookmark starts in that folder and
+     * others have their command typed into the shell
+     */
+    void openBookmarkWindow(Bookmark bm, uint timestamp) {
+        string workingDir;
+        string command = bm.terminalCommand;
+        if (PathBookmark pb = cast(PathBookmark) bm) {
+            workingDir = pb.path;
+            command = null;
+        }
+        AppWindow window = new AppWindow(this, useTabs);
+        Session session = new Session(gsGeneral.getString(SETTINGS_SESSION_NAME_KEY));
+        session.initSession(prfMgr.getDefaultProfile(), workingDir, true);
+        window.initialize(session);
+        window.showAll();
+        if (command.length > 0) {
+            Terminal terminal = cast(Terminal) window.getActiveTerminal();
+            if (terminal !is null) terminal.runCommandInShell(command);
+        }
+        window.presentWithTime(timestamp);
     }
 
     /**

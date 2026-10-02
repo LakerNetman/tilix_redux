@@ -106,6 +106,9 @@ install -Dm 644 data/nautilus/open-tilix.py -t "$PREFIX/share/nautilus-python/ex
 # Copy D-Bus service descriptor
 install -Dm 644 data/dbus/com.gexperts.Tilix.service -t "$PREFIX/share/dbus-1/services/"
 
+# Copy GNOME Shell search provider
+install -Dm 644 data/gnome-shell/com.gexperts.Tilix.search-provider.ini -t "$PREFIX/share/gnome-shell/search-providers/"
+
 # Copy man page
 . "$(dirname "$(realpath "$0")")/data/scripts/install-man-pages.sh"
 
