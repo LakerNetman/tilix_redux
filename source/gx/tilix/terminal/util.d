@@ -81,3 +81,25 @@ unittest {
     // Output moving forward
     assert(!isScrollbackCleared(1100, 1000, 24));
 }
+
+/**
+ * Returns the text to type into a shell to run a startup command: the command
+ * ended by exactly one newline, or nothing if there is no command.
+ */
+string initCommandText(string command) {
+    import std.string : strip, stripRight;
+
+    if (command.strip().length == 0) return "";
+    return command.stripRight("\r\n") ~ "\n";
+}
+
+unittest {
+    assert(initCommandText("npm run server") == "npm run server\n");
+    // A newline already there isn't doubled, which would also run an empty command
+    assert(initCommandText("source venv/bin/activate\n") == "source venv/bin/activate\n");
+    assert(initCommandText("ls\r\n") == "ls\n");
+    // Inner content, including quotes and semicolons, is typed as is
+    assert(initCommandText("cd ~/dev && git status; echo 'done'") == "cd ~/dev && git status; echo 'done'\n");
+    assert(initCommandText("") == "");
+    assert(initCommandText("   ") == "");
+}

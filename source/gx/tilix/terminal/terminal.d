@@ -124,6 +124,7 @@ import gx.gtk.cairo;
 import gx.gtk.color;
 import gx.gtk.clipboard;
 import gx.gtk.dialog;
+import gx.gtk.threads : threadsAddTimeoutDelegate;
 import gx.gtk.resource;
 import gx.gtk.util;
 import gx.gtk.vte;
@@ -262,6 +263,10 @@ private:
     string _overrideTitle;
     //overrides command when load from session JSON
     string _overrideCommand;
+    // Typed into the shell once it starts when loading a session, see queueInitCommand
+    string _initCommand;
+    bool pendingInitCommand;
+    uint initCommandTimeoutID;
     //overrides badge
     string _overrideBadge;
     //Whether synchronized input is turned on in the session
@@ -620,11 +625,13 @@ private:
             dialog.badge = _overrideBadge.length == 0 ? gsProfile.getString(SETTINGS_PROFILE_BADGE_TEXT_KEY) : _overrideBadge;
             dialog.title = _overrideTitle.length == 0 ? gsProfile.getString(SETTINGS_PROFILE_TITLE_KEY) : _overrideTitle;
             dialog.command = _overrideCommand;
+            dialog.initCommand = _initCommand;
             dialog.showAll();
             if (dialog.run() == ResponseType.OK) {
                 _overrideTitle = dialog.title;
                 _overrideBadge = dialog.badge;
                 _overrideCommand = dialog.command;
+                _initCommand = dialog.initCommand;
                 updateDisplayText();
             }
         });
@@ -952,6 +959,8 @@ private:
         });
         vteHandlers ~= vte.addOnContentsChanged(delegate(VTE) {
             if (vte is null) return;
+            // The shell has produced output, normally its prompt, so type the startup command now
+            if (pendingInitCommand) feedInitCommand();
 
             // VTE configuration problem, Issue #34
             // This emits the CTE configuration warning based on whether the currentLocalDirectory is being set.
@@ -2690,6 +2699,34 @@ private:
      * Note that command must be passed in rather then using overrideCommand
      * directly in case we re-spawn it later.
      */
+    /**
+     * Arranges for the startup command to be typed into the shell that was just
+     * started. It is typed when the shell first produces output, normally its
+     * prompt, so it shows like a typed command, or after a short delay if there is
+     * no output. Typing it into the interactive shell keeps what it sets up, i.e.
+     * a virtualenv or exported variables, and the shell stays open afterwards.
+     */
+    void queueInitCommand() {
+        if (_initCommand.length == 0) return;
+        pendingInitCommand = true;
+        if (initCommandTimeoutID > 0) g_source_remove(initCommandTimeoutID);
+        initCommandTimeoutID = threadsAddTimeoutDelegate(1500, delegate() {
+            initCommandTimeoutID = 0;
+            feedInitCommand();
+            return false;
+        });
+    }
+
+    void feedInitCommand() {
+        if (!pendingInitCommand || vte is null) return;
+        pendingInitCommand = false;
+        if (initCommandTimeoutID > 0) {
+            g_source_remove(initCommandTimeoutID);
+            initCommandTimeoutID = 0;
+        }
+        vte.feedChild(initCommandText(_initCommand));
+    }
+
     void spawnTerminalProcess(string workingDir, string command = null) {
 
         void outputError(string msg, string workingDir, string[] args, string[] envv) {
@@ -2803,6 +2840,7 @@ private:
                 if (tilix.processMonitor) {
                     ProcessMonitor.instance.addProcess(gpid);
                 }
+                queueInitCommand();
             }
         }
         catch (GException ge) {
@@ -3908,6 +3946,11 @@ public:
             g_source_remove(timeoutID);
             timeoutID = 0;
         }
+        pendingInitCommand = false;
+        if (initCommandTimeoutID > 0) {
+            g_source_remove(initCommandTimeoutID);
+            initCommandTimeoutID = 0;
+        }
         if (sagTerminalActions !is null) {
             sagTerminalActions.destroy();
             sagTerminalActions = null;
@@ -4122,6 +4165,9 @@ public:
         if (_overrideBadge.length > 0) {
             value[NODE_BADGE] = JSONValue(_overrideBadge);
         }
+        if (_initCommand.length > 0) {
+            value[NODE_INIT_CMD] = JSONValue(_initCommand);
+        }
         if (_overrideCommand.length > 0) {
             value[NODE_OVERRIDE_CMD] = JSONValue(_overrideCommand);
         }
@@ -4136,6 +4182,9 @@ public:
         }
         if (NODE_BADGE in value) {
             _overrideBadge = value[NODE_BADGE].str();
+        }
+        if (NODE_INIT_CMD in value) {
+            _initCommand = value[NODE_INIT_CMD].str();
         }
         if (NODE_OVERRIDE_CMD in value) {
             _overrideCommand = value[NODE_OVERRIDE_CMD].str();
@@ -4703,6 +4752,7 @@ public:
  */
 private:
     enum NODE_OVERRIDE_CMD = "overrideCommand";
+    enum NODE_INIT_CMD = "initCommand";
     enum NODE_BADGE = "badge";
     enum NODE_TITLE = "title";
     enum NODE_READONLY = "readOnly";
