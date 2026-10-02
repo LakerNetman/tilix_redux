@@ -72,6 +72,7 @@ tilix_sources = [
     'source/gx/tilix/customtitle.d',
     'source/gx/tilix/encoding.d',
     'source/gx/tilix/preferences.d',
+    'source/gx/tilix/searchprovider.d',
     'source/gx/tilix/session.d',
     'source/gx/tilix/shortcuts.d',
     'source/gx/tilix/sidebar.d',

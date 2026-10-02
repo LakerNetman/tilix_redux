@@ -63,6 +63,7 @@ check_installed() {
         share/metainfo/com.gexperts.Tilix.appdata.xml \
         share/nautilus-python/extensions/open-tilix.py \
         share/dbus-1/services/com.gexperts.Tilix.service \
+        share/gnome-shell/search-providers/com.gexperts.Tilix.search-provider.ini \
         share/man/man1/tilix.1.gz; do
         [ -f "$PFX/$FILE" ] || MISSING="$MISSING $FILE"
     done

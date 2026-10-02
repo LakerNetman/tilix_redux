@@ -113,3 +113,9 @@ configure_file(
   configuration: conf,
   install_dir: datadir / 'dbus-1' / 'services'
 )
+
+# GNOME Shell search provider, finds open terminals, bookmarks and recent sessions
+install_data(
+  'gnome-shell/@0@.search-provider.ini'.format(project_id),
+  install_dir: datadir / 'gnome-shell' / 'search-providers'
+)

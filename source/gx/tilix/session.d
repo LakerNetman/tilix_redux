@@ -1493,6 +1493,13 @@ public:
     }
 
     /**
+     * The terminals in this session
+     */
+    Terminal[] getTerminals() {
+        return terminals.dup;
+    }
+
+    /**
      * Focus the terminal designated by the UUID
      */
     bool focusTerminal(string uuid) {

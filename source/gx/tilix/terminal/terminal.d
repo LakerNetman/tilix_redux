@@ -266,6 +266,8 @@ private:
     // Typed into the shell once it starts when loading a session, see queueInitCommand
     string _initCommand;
     bool pendingInitCommand;
+    // What queueShellCommand types, the startup command or e.g. a bookmark's command
+    string pendingInitText;
     uint initCommandTimeoutID;
     //overrides badge
     string _overrideBadge;
@@ -2707,7 +2709,12 @@ private:
      * a virtualenv or exported variables, and the shell stays open afterwards.
      */
     void queueInitCommand() {
-        if (_initCommand.length == 0) return;
+        queueShellCommand(_initCommand);
+    }
+
+    void queueShellCommand(string command) {
+        if (command.length == 0) return;
+        pendingInitText = command;
         pendingInitCommand = true;
         if (initCommandTimeoutID > 0) g_source_remove(initCommandTimeoutID);
         initCommandTimeoutID = threadsAddTimeoutDelegate(1500, delegate() {
@@ -2724,7 +2731,7 @@ private:
             g_source_remove(initCommandTimeoutID);
             initCommandTimeoutID = 0;
         }
-        vte.feedChild(initCommandText(_initCommand));
+        vte.feedChild(initCommandText(pendingInitText));
     }
 
     void spawnTerminalProcess(string workingDir, string command = null) {
@@ -4214,6 +4221,21 @@ public:
 
     @property string currentLocalDirectory() {
         return gst.getState(TerminalStateType.LOCAL).directory;
+    }
+
+    /**
+     * The title shown in the title bar, as Pango markup
+     */
+    @property string displayTitle() {
+        return lastTitle;
+    }
+
+    /**
+     * Types a command into the shell, once it has started if it was just spawned,
+     * as if the user typed it and pressed Enter
+     */
+    void runCommandInShell(string command) {
+        queueShellCommand(command);
     }
 
     @property string defaultProfileUUID() {
