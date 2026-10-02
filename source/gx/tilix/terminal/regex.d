@@ -433,7 +433,8 @@ enum TerminalURLFlavor {
     VOIP_CALL,
     EMAIL,
     NUMBER,
-    CUSTOM
+    CUSTOM,
+    FILE_PATH
 };
 
 struct TerminalRegex {
@@ -442,6 +443,60 @@ struct TerminalRegex {
     bool caseless;
     // Only used for custom regex
     string command;
+}
+
+/**
+ * File paths that can be clicked to open the file, optionally followed by
+ * :line or :line:column as compilers and test runners print them. Matches
+ * absolute paths, ones starting with ~/, ./ or ../, and other relative paths
+ * with an extension on the last part, i.e. src/app.py, so text like and/or,
+ * dates and fractions don't match. The lookbehind stops matches inside URLs.
+ */
+enum REGEX_FILE_PATH = "(?<![\\w:/.~@+\\-])(?:(?:~|\\.{1,2})?/(?:[\\w.+@\\-]+/)*[\\w.+@\\-]+|(?:[\\w.+@\\-]+/)+[\\w+@\\-]*\\.[A-Za-z0-9]{1,10})(?::\\d+(?::\\d+)?)?";
+
+/// The file path link, added when file links are turned on
+immutable TerminalRegex FILE_PATH_REGEX = TerminalRegex(REGEX_FILE_PATH, TerminalURLFlavor.FILE_PATH, false);
+
+/**
+ * A clicked file path split into its parts
+ */
+struct FileLink {
+    string path;
+    string line;
+    string column;
+}
+
+/**
+ * Splits a matched file path into the path and the line and column after it,
+ * dropping a trailing full stop as at the end of a sentence
+ */
+FileLink parseFileLink(string text) {
+    import std.regex : matchFirst, regex;
+    import std.string : stripRight;
+
+    FileLink result;
+    auto m = matchFirst(text, regex(`^(.+?)(?::(\d+)(?::(\d+))?)?$`));
+    if (!m) return result;
+    result.path = m[1].stripRight(".");
+    result.line = m[2];
+    result.column = m[3];
+    return result;
+}
+
+/**
+ * Turns a clicked path into an absolute one: ~ is the home directory, and a
+ * relative path is relative to the terminal's directory. Returns null for a
+ * relative path when the directory isn't known.
+ */
+string resolveFileLinkPath(string path, string cwd, string home) {
+    import std.path : buildNormalizedPath, isAbsolute;
+
+    if (path.length == 0) return null;
+    if (path == "~") return home;
+    if (path.length > 1 && path[0 .. 2] == "~/") return buildNormalizedPath(home, path[2 .. $]);
+    if (isAbsolute(path)) return buildNormalizedPath(path);
+    if (cwd.length == 0) return null;
+    return buildNormalizedPath(cwd, path);
 }
 
 /**
@@ -784,3 +839,44 @@ private:
         if (match.matches && match.getMatchCount() == 1) return match.fetch(0);
         else return null;
     }
+
+// File path links
+unittest {
+    string match(string text) {
+        GRegex regex = new GRegex(REGEX_FILE_PATH, cast(GRegexCompileFlags) 0, cast(GRegexMatchFlags) 0);
+        MatchInfo info;
+        if (!regex.match(text, cast(GRegexMatchFlags) 0, info)) return null;
+        return info.fetch(0);
+    }
+
+    // As printed by test runners and compilers
+    assert(match("# ./spec/presenters/presenter_spec.rb:68:in `block'") == "./spec/presenters/presenter_spec.rb:68");
+    assert(match("source/gx/tilix/terminal.d(1460,16): Error") == "source/gx/tilix/terminal.d");
+    assert(match("src/main.c:12:5: warning: unused") == "src/main.c:12:5");
+    assert(match("see ../README.md for details") == "../README.md");
+    assert(match("edit ~/.bashrc now") == "~/.bashrc");
+    assert(match("cat /etc/hosts") == "/etc/hosts");
+    assert(match("ls /usr/local/bin") == "/usr/local/bin");
+    // Not paths
+    assert(match("this and/or that") is null);
+    assert(match("on 2026/10/01 at") is null);
+    assert(match("about 1/2 done") is null);
+    assert(match("mail me@example.com") is null);
+    // Not the path part of a URL
+    assert(match("https://example.com/docs/index.html") is null);
+
+    FileLink fl = parseFileLink("./spec/presenter_spec.rb:68");
+    assert(fl.path == "./spec/presenter_spec.rb" && fl.line == "68" && fl.column == "");
+    fl = parseFileLink("src/main.c:12:5");
+    assert(fl.path == "src/main.c" && fl.line == "12" && fl.column == "5");
+    fl = parseFileLink("/etc/hosts.");
+    assert(fl.path == "/etc/hosts" && fl.line == "");
+
+    assert(resolveFileLinkPath("./spec/a.rb", "/home/u/app", "/home/u") == "/home/u/app/spec/a.rb");
+    assert(resolveFileLinkPath("../README.md", "/home/u/app/src", "/home/u") == "/home/u/app/README.md");
+    assert(resolveFileLinkPath("~/.bashrc", "/tmp", "/home/u") == "/home/u/.bashrc");
+    assert(resolveFileLinkPath("/etc/hosts", "", "/home/u") == "/etc/hosts");
+    // A relative path needs the terminal's directory
+    assert(resolveFileLinkPath("src/a.c", "", "/home/u") is null);
+    assert(resolveFileLinkPath("", "/tmp", "/home/u") is null);
+}
