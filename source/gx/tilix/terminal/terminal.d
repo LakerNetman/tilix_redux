@@ -215,6 +215,12 @@ private:
     ExtendedVTE vte;
     gulong[] vteHandlers;
     Overlay terminalOverlay;
+    // Holds the title bar and terminal, its margins make room for the border
+    Box contentBox;
+    // Applies the profile's padding to the VTE widget, null when there is none
+    CssProvider paddingProvider;
+    int borderWidth;
+    RGBA borderColor;
     ScrolledWindow sw;
     Scrollbar sb;
 
@@ -330,7 +336,10 @@ private:
         createActions(sagTerminalActions);
 
         Box box = new Box(Orientation.VERTICAL, 0);
+        contentBox = box;
         add(box);
+        // Drawn after the children, in the margins updateBorder gives the box
+        addOnDraw(&drawBorder, ConnectFlags.AFTER);
         // Create the title bar of the pane
         Widget titlePane = createTitlePane();
         box.add(titlePane);
@@ -2595,6 +2604,12 @@ private:
                 vte.setCellWidthScale(gsProfile.getDouble(SETTINGS_PROFILE_CELL_WIDTH_SCALE_KEY));
             }
             break;
+        case SETTINGS_PROFILE_PADDING_KEY:
+            updatePadding();
+            break;
+        case SETTINGS_PROFILE_BORDER_WIDTH_KEY, SETTINGS_PROFILE_BORDER_COLOR_KEY:
+            updateBorder();
+            break;
         case SETTINGS_PROFILE_MARGIN_KEY:
             if (vte !is null && isVTEBackgroundDrawEnabled()) {
                 margin = gsProfile.getInt(SETTINGS_PROFILE_MARGIN_KEY);
@@ -2616,6 +2631,61 @@ private:
     void applySecondaryColorPreferences() {
         applyPreference(SETTINGS_PROFILE_CURSOR_FG_COLOR_KEY);
         applyPreference(SETTINGS_PROFILE_HIGHLIGHT_FG_COLOR_KEY);
+    }
+
+    /**
+     * Applies the profile's padding to the VTE widget with CSS, like the padding
+     * people set in gtk.css. With no padding the provider is removed so padding
+     * from gtk.css or the theme still applies.
+     */
+    void updatePadding() {
+        StyleContext context = vte.getStyleContext();
+        if (paddingProvider !is null) {
+            context.removeProvider(paddingProvider);
+            paddingProvider = null;
+        }
+        string css = paddingCss(gsProfile.getInt(SETTINGS_PROFILE_PADDING_KEY));
+        if (css.length == 0) return;
+        paddingProvider = new CssProvider();
+        if (!paddingProvider.loadFromData(css)) {
+            warningf("Could not apply padding CSS '%s'", css);
+            paddingProvider = null;
+            return;
+        }
+        // Above gtk.css so the profile's setting wins where both set it
+        context.addProvider(paddingProvider, ProviderPriority.USER + 1);
+    }
+
+    /**
+     * Makes room for the profile's border around the title bar and terminal and
+     * redraws it, see drawBorder
+     */
+    void updateBorder() {
+        borderWidth = clampBorderWidth(gsProfile.getInt(SETTINGS_PROFILE_BORDER_WIDTH_KEY));
+        RGBA color = new RGBA();
+        if (!color.parse(gsProfile.getString(SETTINGS_PROFILE_BORDER_COLOR_KEY))) {
+            color.parse("#808080");
+        }
+        borderColor = color;
+        if (contentBox !is null) {
+            contentBox.setMarginLeft(borderWidth);
+            contentBox.setMarginRight(borderWidth);
+            contentBox.setMarginTop(borderWidth);
+            contentBox.setMarginBottom(borderWidth);
+        }
+        queueDraw();
+    }
+
+    bool drawBorder(Scoped!Context cr, Widget widget) {
+        if (borderWidth <= 0 || borderColor is null) return false;
+        double width = borderWidth;
+        cr.save();
+        cr.setSourceRgba(borderColor.red, borderColor.green, borderColor.blue, borderColor.alpha);
+        cr.setLineWidth(width);
+        cr.rectangle(width / 2, width / 2, getAllocatedWidth() - width, getAllocatedHeight() - width);
+        cr.stroke();
+        cr.restore();
+        return false;
     }
 
     /**
@@ -2652,6 +2722,8 @@ private:
             SETTINGS_PROFILE_CELL_HEIGHT_SCALE_KEY,
             SETTINGS_PROFILE_CELL_WIDTH_SCALE_KEY,
             SETTINGS_PROFILE_MARGIN_KEY,
+            SETTINGS_PROFILE_PADDING_KEY,
+            SETTINGS_PROFILE_BORDER_WIDTH_KEY,
             SETTINGS_PROFILE_BADGE_USE_SYSTEM_FONT_KEY
         ];
 

@@ -655,6 +655,22 @@
       <default>'Monospace 12'</default>
       <summary>A Pango font name and size</summary>
     </key>
+    <key name="padding" type="i">
+      <range min="0" max="64"/>
+      <default>0</default>
+      <summary>Space in pixels between the text and the edges of the terminal</summary>
+      <description>Space in pixels between the text and the edges of the terminal, filled with the background color. 0 leaves any padding set in the GTK theme or gtk.css.</description>
+    </key>
+    <key name="border-width" type="i">
+      <range min="0" max="16"/>
+      <default>0</default>
+      <summary>Width in pixels of a border drawn around the terminal</summary>
+      <description>Width in pixels of a border drawn around the terminal and its title bar, 0 for no border.</description>
+    </key>
+    <key name="border-color" type="s">
+      <default>'#808080'</default>
+      <summary>Color of the border drawn around the terminal</summary>
+    </key>
     <key name="draw-margin" type="i">
       <default>80</default>
       <summary>Draws a margin line at the column specified</summary>
