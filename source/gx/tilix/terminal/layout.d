@@ -27,6 +27,7 @@ private:
     Entry eBadge;
     Entry eTitle;
     Entry eCommand;
+    Entry eInitCommand;
 
 public:
     this(Window window) {
@@ -86,13 +87,23 @@ public:
         grid.attach(lblLoad, 0, row, 2, 1);
         row++;
 
-        Label lblCommand = new Label(_("Command"));
+        Label lblCommand = new Label(_("Instead of shell"));
         lblCommand.setHalign(GtkAlign.END);
 
         grid.attach(lblCommand, 0, row, 1, 1);
         eCommand = new Entry();
         eCommand.setWidthChars(20);
+        eCommand.setTooltipText(_("A command to run instead of the shell. The terminal closes or restarts when it ends, depending on the profile."));
         grid.attach(eCommand, 1, row, 1, 1);
+        row++;
+
+        Label lblInitCommand = new Label(_("Run in shell"));
+        lblInitCommand.setHalign(GtkAlign.END);
+        grid.attach(lblInitCommand, 0, row, 1, 1);
+        eInitCommand = new Entry();
+        eInitCommand.setWidthChars(20);
+        eInitCommand.setTooltipText(_("A command typed into the shell once it starts. The shell stays open afterwards, with anything the command set up."));
+        grid.attach(eInitCommand, 1, row, 1, 1);
         row++;
 
         Label lblInfo = new Label(_("Active options are always in effect and apply immediately.\nSession Load options only apply when loading a session file."));
@@ -133,6 +144,16 @@ public:
     @property void command(string value) {
         if (value.length > 0) {
             eCommand.setText(value);
+        }
+    }
+
+    @property string initCommand() {
+        return eInitCommand.getText();
+    }
+
+    @property void initCommand(string value) {
+        if (value.length > 0) {
+            eInitCommand.setText(value);
         }
     }
 }
