@@ -81,3 +81,57 @@ unittest {
     // Output moving forward
     assert(!isScrollbackCleared(1100, 1000, 24));
 }
+
+/**
+ * Returns the local directory of a terminal for actions such as opening a file
+ * browser, or null if it isn't known.
+ *
+ * The shell reports its directory through shell integration (vte.sh). Without it
+ * the shell's working directory is read from the proc file system, and failing that,
+ * i.e. in a Flatpak where the shell runs on the host, the directory the terminal
+ * started in is used.
+ *
+ * Params:
+ *  reported   = The directory reported by the shell, empty if none
+ *  shell      = The pid of the terminal's shell, 0 or less if not running
+ *  initialCWD = The directory the terminal started in
+ *  procRoot   = The proc file system, tests use a directory with the same layout
+ */
+string terminalLocalDirectory(string reported, int shell, string initialCWD, string procRoot = "/proc") {
+    import std.path : buildPath;
+
+    if (reported.length > 0) return reported;
+    if (shell > 0) {
+        try {
+            string cwd = readLink(buildPath(procRoot, to!string(shell), "cwd"));
+            if (cwd.length > 0 && isDir(cwd)) return cwd;
+        } catch (Exception e) {
+            // The shell exited, or its directory can't be read
+        }
+    }
+    if (initialCWD.length > 0 && exists(initialCWD) && isDir(initialCWD)) return initialCWD;
+    return null;
+}
+
+unittest {
+    import std.path : buildPath;
+
+    string root = buildPath(tempDir(), "tilix-cwd-test-" ~ to!string(thisProcessID()));
+    string shellDir = buildPath(root, "projects");
+    mkdirRecurse(shellDir);
+    mkdirRecurse(buildPath(root, "proc", "100"));
+    symlink(shellDir, buildPath(root, "proc", "100", "cwd"));
+    scope(exit) rmdirRecurse(root);
+    string proc = buildPath(root, "proc");
+
+    // The reported directory wins
+    assert(terminalLocalDirectory("/reported", 100, "/start", proc) == "/reported");
+    // Without shell integration the shell's own working directory is used
+    assert(terminalLocalDirectory("", 100, "/start", proc) == shellDir);
+    // The shell isn't visible, i.e. in a Flatpak, so the starting directory is used
+    assert(terminalLocalDirectory("", 200, root, proc) == root);
+    assert(terminalLocalDirectory("", 0, root, proc) == root);
+    // Nothing known, or a starting directory that no longer exists
+    assert(terminalLocalDirectory("", 200, "", proc) is null);
+    assert(terminalLocalDirectory("", 200, buildPath(root, "gone"), proc) is null);
+}

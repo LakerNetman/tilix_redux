@@ -162,6 +162,16 @@
       <summary>The window state (maximized, minimized, etc) to restore</summary>
       <description>Saves the last window state on exit and restores it upon new invocation</description>
     </key>
+    <key name="window-width" type="i">
+      <default>-1</default>
+      <summary>The window width to restore</summary>
+      <description>The width of the window when it was last closed while not maximized or full screen, -1 if none. Used when window-save-state is true.</description>
+    </key>
+    <key name="window-height" type="i">
+      <default>-1</default>
+      <summary>The window height to restore</summary>
+      <description>The height of the window when it was last closed while not maximized or full screen, -1 if none. Used when window-save-state is true.</description>
+    </key>
     <key name="window-save-state" type="b">
       <default>false</default>
       <summary>If true, the window state is saved and restored between invocations</summary>

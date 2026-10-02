@@ -29,6 +29,7 @@ import gtkc.giotypes : GApplicationFlags;
 import gdkpixbuf.Pixbuf;
 
 import gdk.Event;
+import gdk.Window : GdkWindow = Window;
 import gdk.Keysyms;
 import gdk.RGBA;
 import gdk.Screen;
@@ -212,6 +213,10 @@ private:
     string[DialogPath] dialogPaths;
 
     uint timeoutID;
+
+    // The window's size when not maximized, full screen or tiled, saved on close
+    int normalWidth = -1;
+    int normalHeight = -1;
 
     bool isCSDDisabled() {
         return windowStyle > 0;
@@ -754,7 +759,7 @@ private:
 
         if (useTabs) {
             SessionTabLabel label = cast(SessionTabLabel) nb.getTabLabel(page);
-            label.onCloseClicked.connect(&closeSession);
+            label.onCloseClicked.connect(&onTabCloseClicked);
             nb.setTabReorderable(session, true);
             nb.setTabDetachable(session, true);
         }
@@ -815,6 +820,14 @@ private:
     /**
      * Used to handle cases where the user requests a session be closed
      */
+    /**
+     * The close button on a tab. Goes through the same checks as closing the session
+     * from the menu or sidebar, which ask first if processes are running.
+     */
+    void onTabCloseClicked(Session session) {
+        onUserSessionClose(session.uuid, new CumulativeResult!bool());
+    }
+
     void onUserSessionClose(string sessionUUID, CumulativeResult!bool result) {
         if (_noPrompt) {
             result.addResult(false);
@@ -846,7 +859,7 @@ private:
         if (useTabs) {
             SessionTabLabel label = cast(SessionTabLabel) nb.getTabLabel(session);
             if (label !is null) {
-                label.onCloseClicked.disconnect(&closeSession);
+                label.onCloseClicked.disconnect(&onTabCloseClicked);
                 label.clear();
             }
         }
@@ -983,7 +996,7 @@ private:
         trace("Detaching tab, create new window");
         SessionTabLabel label = cast(SessionTabLabel) nb.getTabLabel(page);
         if (label !is null) {
-            label.onCloseClicked.disconnect(&closeSession);
+            label.onCloseClicked.disconnect(&onTabCloseClicked);
         }
         AppWindow window = cloneWindow();
         window.move(x, y);
@@ -1203,6 +1216,10 @@ private:
 
     void onWindowDestroyed(Widget) {
         tracef("AppWindow %s destroyed", uuid);
+        if (normalWidth > 0 && normalHeight > 0 && !isQuake() && gsSettings.getBoolean(SETTINGS_WINDOW_SAVE_STATE_KEY)) {
+            gsSettings.setInt(SETTINGS_WINDOW_WIDTH_KEY, normalWidth);
+            gsSettings.setInt(SETTINGS_WINDOW_HEIGHT_KEY, normalHeight);
+        }
         _destroyed = true;
         tilix.withdrawNotification(uuid);
         tilix.removeAppWindow(this);
@@ -1233,7 +1250,9 @@ private:
             } else if (getCurrentSession() !is null) {
                 getCurrentSession().focusTerminal(1);
             }
-        } else if (tilix.getGlobalOverrides().geometry.flag == GeometryFlag.NONE && !isWayland(this) && gsSettings.getBoolean(SETTINGS_WINDOW_SAVE_STATE_KEY)) {
+        } else if (restoresWindowState()) {
+            // Wayland doesn't let applications place windows, but maximizing and
+            // full screen work, so these are restored there too
             GdkWindowState state = cast(GdkWindowState)gsSettings.getInt(SETTINGS_WINDOW_STATE_KEY);
             if (state & GdkWindowState.MAXIMIZED) {
                 maximize();
@@ -1676,6 +1695,30 @@ private:
         }
     }
 
+    /**
+     * Whether one of Tilix's own windows other than a terminal window has the
+     * focus, i.e. Preferences or a dialog. The quake window stays visible for
+     * those, while it hides for other applications and other terminal windows.
+     */
+    bool ownSecondaryWindowHasFocus() {
+        ListG list = Window.listToplevels();
+        if (list is null) return false;
+        foreach (Window window; list.toArray!(Window)()) {
+            if (window.getWindowStruct() == this.getWindowStruct()) continue;
+            if (window.isActive() && cast(AppWindow) window is null) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether the saved window size and state are restored for this window. A
+     * geometry from the command line and quake mode take precedence.
+     */
+    bool restoresWindowState() {
+        return !isQuake() && tilix.getGlobalOverrides().geometry.flag == GeometryFlag.NONE &&
+            gsSettings.getBoolean(SETTINGS_WINDOW_SAVE_STATE_KEY);
+    }
+
     void removeTimeout() {
         if (timeoutID > 0) {
             g_source_remove(timeoutID);
@@ -1795,6 +1838,12 @@ public:
                 timeoutID = threadsAddTimeoutDelegate(gsSettings.getInt(SETTINGS_QUAKE_HIDE_LOSE_FOCUS_DELAY_KEY), delegate() {
                     // The source is removed once this returns false, don't remove it again
                     timeoutID = 0;
+                    // Focus has settled by now, checking when focus was lost isn't enough
+                    // since the newly focused window may not be active yet
+                    if (ownSecondaryWindowHasFocus()) {
+                        trace("Focus is in one of Tilix's own windows, i.e. Preferences, not hiding quake window");
+                        return false;
+                    }
                     trace("Focus lost and timeout reached, hiding quake window");
                     if (isVisible()) {
                         this.hide();
@@ -1811,6 +1860,20 @@ public:
             tilix.withdrawNotification(uuid);
             if (getCurrentSession() !is null) {
                 getCurrentSession().withdrawNotification();
+            }
+            return false;
+        });
+        addOnConfigure(delegate(GdkEventConfigure* event, Widget) {
+            // Remember the size the window has when it isn't maximized, full screen or
+            // tiled, so it can be restored even if it's closed while maximized
+            GdkWindow gdkWindow = getWindow();
+            if (gdkWindow !is null) {
+                enum notNormal = GdkWindowState.MAXIMIZED | GdkWindowState.FULLSCREEN | GdkWindowState.ICONIFIED |
+                    GdkWindowState.TILED | GdkWindowState.LEFT_TILED | GdkWindowState.RIGHT_TILED |
+                    GdkWindowState.TOP_TILED | GdkWindowState.BOTTOM_TILED;
+                if ((gdkWindow.getState() & notNormal) == 0) {
+                    getSize(normalWidth, normalHeight);
+                }
             }
             return false;
         });
@@ -1835,6 +1898,12 @@ public:
     }
 
     void initialize() {
+        // A session file's own size, applied when it loads, takes precedence
+        if (restoresWindowState() && tilix.getGlobalOverrides().session.length == 0) {
+            int width = gsSettings.getInt(SETTINGS_WINDOW_WIDTH_KEY);
+            int height = gsSettings.getInt(SETTINGS_WINDOW_HEIGHT_KEY);
+            if (width > 0 && height > 0) setDefaultSize(width, height);
+        }
         if (tilix.getGlobalOverrides().session.length > 0) {
             foreach (sessionFilename; tilix.getGlobalOverrides().session) {
                 try {

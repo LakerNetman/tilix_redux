@@ -221,6 +221,14 @@ private:
     }
 
     void onCreateNewSession() {
+        // From the command line with --quake the session is for the Quake window,
+        // i.e. tilix -q --action=app-new-session -w dir
+        AppWindow quakeWindow = cp.quake ? getQuakeWindow() : null;
+        if (quakeWindow !is null) {
+            quakeWindow.createSession();
+            activateWindow(quakeWindow);
+            return;
+        }
         AppWindow appWindow = cast(AppWindow) getActiveWindow();
         if (appWindow !is null) {
             appWindow.createSession();
@@ -367,7 +375,10 @@ private:
         if (cp.exitCode == 0 && cp.action.length > 0) {
             string terminalUUID = cp.terminalUUID;
             if (terminalUUID.length == 0) {
-                AppWindow window = getActiveAppWindow();
+                // With --quake the action is for the Quake window, not whichever window
+                // was used last, i.e. tilix -q --action=app-new-session -w dir
+                AppWindow window = cp.quake ? getQuakeWindow() : null;
+                if (window is null) window = getActiveAppWindow();
                 if (window !is null) terminalUUID = window.getActiveTerminalUUID();
             }
             //If workingDir is not set, override it with cwd so that it takes priority for

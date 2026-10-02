@@ -659,9 +659,18 @@ private:
 
         //Open CWD in Browser
         registerActionWithSettings(group, ACTION_PREFIX, ACTION_FILE_BROWSER, gsShortcuts, delegate(GVariant state, SimpleAction sa) {
-            // Only support local directories for now
-            string uri = URI.filenameToUri(gst.currentLocalDirectory, null);
-            tracef("Opening directory: %s, hostname: %s, uri: %s", gst.currentDirectory, gst.currentHostname, uri);
+            // Only support local directories for now. Without shell integration no
+            // directory is reported, passing an empty one fails with GLib-CRITICAL errors.
+            // In a Flatpak the shell's pid is a host pid, the sandbox's /proc would show another process
+            string directory = terminalLocalDirectory(gst.currentLocalDirectory, isFlatpak() ? 0 : gpid, gst.initialCWD);
+            if (directory.length == 0) {
+                showErrorDialog(cast(Window) getToplevel(),
+                    _("The terminal's current directory isn't known. Set up shell integration (vte.sh) so the shell reports it."),
+                    _("Directory Not Known"));
+                return;
+            }
+            string uri = URI.filenameToUri(directory, null);
+            tracef("Opening directory: %s, hostname: %s, uri: %s", directory, gst.currentHostname, uri);
             MountOperation.showUri(null, uri, Main.getCurrentEventTime);
         });
 
@@ -1881,12 +1890,16 @@ private:
 
             mmContext.appendItem(clipItem);
         }
+        // Maximize is always offered, it's quicker than the small title bar button
+        // in a busy layout. The other title bar items are only added when it's hidden.
+        GMenu windowSection = new GMenu();
+        windowSection.append(terminalWindowState == TerminalWindowState.MAXIMIZED ? _("Restore") : _("Maximize"), getActionDetailedName(ACTION_PREFIX, ACTION_MAXIMIZE));
+        if (!bTitle.isVisible()) {
+            windowSection.append(_("Close"), getActionDetailedName(ACTION_PREFIX, ACTION_CLOSE));
+        }
+        mmContext.appendSection(null, windowSection);
         //Check if titlebar is hidden and add extra items
         if (!bTitle.isVisible()) {
-            GMenu windowSection = new GMenu();
-            windowSection.append(terminalWindowState == TerminalWindowState.MAXIMIZED ? _("Restore") : _("Maximize"), getActionDetailedName(ACTION_PREFIX, ACTION_MAXIMIZE));
-            windowSection.append(_("Close"), getActionDetailedName(ACTION_PREFIX, ACTION_CLOSE));
-            mmContext.appendSection(null, windowSection);
             if (_synchronizeInput) {
                 GMenu syncInputSection = new GMenu();
                 syncInputSection.append(_("Synchronize input"), getActionDetailedName(ACTION_PREFIX, ACTION_SYNC_INPUT_OVERRIDE));

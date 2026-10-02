@@ -60,6 +60,8 @@ enum SETTINGS_ACCELERATORS_ENABLED = "accelerators-enabled";
 
 enum SETTINGS_WINDOW_STATE_KEY = "window-state";
 enum SETTINGS_WINDOW_SAVE_STATE_KEY = "window-save-state";
+enum SETTINGS_WINDOW_WIDTH_KEY = "window-width";
+enum SETTINGS_WINDOW_HEIGHT_KEY = "window-height";
 enum SETTINGS_WINDOW_STYLE_KEY = "window-style";
 immutable string[] SETTINGS_WINDOW_STYLE_VALUES = ["normal","disable-csd","disable-csd-hide-toolbar","borderless"];
 

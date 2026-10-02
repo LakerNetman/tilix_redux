@@ -101,7 +101,7 @@ private:
 
         //Tabs to Spaces
         Box bTabs = new Box(Orientation.HORIZONTAL, 6);
-        cbTabsToSpaces = new CheckButton(_("Convert spaces to tabs"));
+        cbTabsToSpaces = new CheckButton(_("Convert tabs to spaces"));
         gsSettings.bind(SETTINGS_ADVANCED_PASTE_REPLACE_TABS_KEY, cbTabsToSpaces, "active", GSettingsBindFlags.DEFAULT);
         bTabs.add(cbTabsToSpaces);
 
